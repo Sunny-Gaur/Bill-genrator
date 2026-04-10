@@ -471,8 +471,13 @@ function startNewBill() {
 }
 
 function showQuestion(stepKey) {
+    console.log('[DEBUG showQuestion] stepKey:', stepKey);
     const step = QuestionFlow[stepKey];
-    if (!step) return;
+    if (!step) {
+        console.log('[DEBUG showQuestion] Step not found in QuestionFlow!');
+        return;
+    }
+    console.log('[DEBUG showQuestion] Found step, inputType:', step.inputType);
 
     clearPhoneConfirmBtn();
     const question = getQuestion(stepKey);
@@ -572,13 +577,28 @@ function handleTextInput() {
     }
     
     if (step.inputType === 'dimensions') {
+        console.log('[DEBUG handleTextInput] Raw input value:', value);
+        console.log('[DEBUG handleTextInput] Current step:', AppState.currentStep);
         const dimensions = parseDimensions(value);
+        console.log('[DEBUG handleTextInput] parseDimensions returned:', dimensions);
         if (dimensions) {
             addMessage(`Length: ${dimensions.length}', Breadth: ${dimensions.breadth}'`, 'user');
             DOM.textInput.value = '';
-            processAnswer(dimensions, step);
+            // Directly save dimensions and advance to tileType
+            ensureCurrentRoom();
+            if (AppState.currentFloorIndex >= 0 && AppState.bill.currentRoomIndex >= 0) {
+                const currentRoom = AppState.bill.floors[AppState.currentFloorIndex].rooms[AppState.bill.currentRoomIndex];
+                currentRoom.length = dimensions.length;
+                currentRoom.breadth = dimensions.breadth;
+                AppState.bill.updatedAt = new Date().toISOString();
+                saveToLocalStorage();
+            }
+            AppState.currentStep = 'tileType';
+            console.log('[DEBUG handleTextInput] Advanced to tileType');
+            updatePreview();
+            showQuestion('tileType');
         } else {
-            showToast('Format samajh nahi aaya. Bolo: 12 by 14', 'error');
+            showToast('Format samajh nahi aaya. Bolo: 12 by 14 ya 12 14', 'error');
         }
         return;
     }
@@ -599,6 +619,7 @@ function handleTextInput() {
 
 function parseDimensions(input) {
     const text = input.toLowerCase().trim();
+    console.log('[DEBUG parseDimensions] Input text:', text);
 
     // Patterns: "12 by 14", "12x14" (ordered by specificity)
     const patterns = [
@@ -606,15 +627,21 @@ function parseDimensions(input) {
         /(\d+)\s+(\d+)/  // Least specific: 12 14 (must be last)
     ];
 
-    for (const pattern of patterns) {
+    for (let i = 0; i < patterns.length; i++) {
+        const pattern = patterns[i];
         const match = text.match(pattern);
+        console.log(`[DEBUG parseDimensions] Pattern ${i}:`, pattern, 'Match:', match);
         if (match) {
             const length = parseFloat(match[1]);
             const breadth = parseFloat(match[2]);
+            console.log(`[DEBUG parseDimensions] Parsed length: ${length}, breadth: ${breadth}`);
 
             // Validate reasonable room dimensions (0-500 feet)
             if (length > 0 && length <= 500 && breadth > 0 && breadth <= 500) {
+                console.log('[DEBUG parseDimensions] Returning valid dimensions:', { length, breadth });
                 return { length, breadth };
+            } else {
+                console.log('[DEBUG parseDimensions] Validation FAILED - out of range');
             }
         }
     }
@@ -743,12 +770,23 @@ function showImageUploadUI() {
 }
 
 function processAnswer(value, step) {
+    console.log('[DEBUG processAnswer] Called with value:', value, 'step:', step, 'currentStep:', AppState.currentStep);
+    console.log('[DEBUG processAnswer] currentFloorIndex:', AppState.currentFloorIndex, 'currentRoomIndex:', AppState.bill.currentRoomIndex);
     // Handle dimensions (length + breadth combined)
-    if (AppState.currentStep === 'roomDimensions' && typeof value === 'object' && value.length && value.breadth) {
+    if ((AppState.currentStep === 'roomDimensions' || AppState.currentStep === 'roomDimensionsManual') && typeof value === 'object' && value.length && value.breadth) {
+        console.log('[DEBUG processAnswer] Dimensions branch matched! Saving and advancing to tileType');
         ensureCurrentRoom();
+        console.log('[DEBUG processAnswer] After ensureCurrentRoom, currentFloorIndex:', AppState.currentFloorIndex);
+        if (AppState.currentFloorIndex === -1) {
+            console.error('[DEBUG processAnswer] ERROR: currentFloorIndex is still -1! Cannot save dimensions.');
+            showToast('Error: Floor not set. Please go back and select a floor.', 'error');
+            return;
+        }
         AppState.bill.floors[AppState.currentFloorIndex].rooms[AppState.bill.currentRoomIndex].length = value.length;
         AppState.bill.floors[AppState.currentFloorIndex].rooms[AppState.bill.currentRoomIndex].breadth = value.breadth;
         AppState.currentStep = 'tileType';
+        console.log('[DEBUG processAnswer] After save, currentStep set to:', AppState.currentStep);
+        console.log('[DEBUG processAnswer] Room data:', AppState.bill.floors[AppState.currentFloorIndex].rooms[AppState.bill.currentRoomIndex]);
     } else {
         saveValue(value, step);
         
@@ -784,6 +822,7 @@ function processAnswer(value, step) {
         return;
     }
 
+    console.log('[DEBUG processAnswer] About to call showQuestion with currentStep:', AppState.currentStep);
     updatePreview();
     showQuestion(AppState.currentStep);
 }
@@ -1998,9 +2037,12 @@ async function handleVoiceInput(transcript) {
     }
     
     if (step.inputType === 'dimensions') {
+        console.log('[DEBUG handleVoiceInput dimensions] Transcript:', transcript);
         const dimensions = parseDimensions(transcript);
+        console.log('[DEBUG handleVoiceInput dimensions] parseDimensions returned:', dimensions);
         if (dimensions) {
             addMessage(`Length: ${dimensions.length}', Breadth: ${dimensions.breadth}'`, 'user');
+            console.log('[DEBUG handleVoiceInput dimensions] Calling processAnswer with:', dimensions);
             processAnswer(dimensions, step);
         } else {
             addMessage(`Suna: "${transcript}" - Samajh nahi aaya. Bolo: 12 by 14`, 'system');
@@ -2364,13 +2406,30 @@ function updateCornerOverlay() {
 }
 
 function calculateRoomArea() {
+    // Calculate approximate dimensions from 4 corners
+    if (measurementCorners.length === 4) {
+        // Calculate width and height from corner points (normalized 0-1)
+        const width = Math.abs(measurementCorners[1].x - measurementCorners[0].x);
+        const height = Math.abs(measurementCorners[2].y - measurementCorners[0].y);
+        
+        // Ask user for one reference measurement to scale
+        closeMeasurementOverlay();
+        
+        // Show simple prompt with voice guidance
+        addMessage("Room ki photo le li! ✅ Ab ek deewar ki lambai batao (feet mein). Jaise: 12", 'system');
+        speakQuestion("Ab ek deewar ki lambai batao", { lang: 'hi-IN' });
+        
+        // Set up to receive the reference measurement
+        AppState._pendingCornerScale = { width, height };
+        AppState.currentStep = 'roomDimensionsManual';
+        showQuestion('roomDimensionsManual');
+        return;
+    }
+    
+    // Fallback if corners not marked
     closeMeasurementOverlay();
-
-    // Trigger manual input for verification/calibration
     AppState.currentStep = 'roomDimensionsManual';
     showQuestion('roomDimensionsManual');
-    showToast("Ab ek deewar ki lambai batao (feet mein)", "info");
-    speakQuestion("Ab ek deewar ki lambai batao", { lang: 'hi-IN' });
 }
 
 function enterManualMeasure() {
