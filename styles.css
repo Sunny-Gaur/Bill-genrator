@@ -1352,3 +1352,203 @@ body {
     0%, 80%, 100% { transform: translateY(0); }
     40% { transform: translateY(-6px); }
 }
+
+/* ===== Room Measurement Overlay ===== */
+.measurement-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: #fff;
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+}
+
+.measurement-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px;
+    background: var(--primary);
+    color: white;
+}
+
+.measurement-header h2 {
+    font-size: 1.5rem;
+    margin: 0;
+}
+
+.close-measure-btn {
+    background: none;
+    border: none;
+    color: white;
+    font-size: 2rem;
+    cursor: pointer;
+    width: 48px;
+    height: 48px;
+}
+
+.measure-choices {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    padding: 32px 16px;
+    flex: 1;
+    justify-content: center;
+}
+
+.measure-card {
+    background: #f8f9fa;
+    border: 2px solid #e9ecef;
+    border-radius: 16px;
+    padding: 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+}
+
+.measure-card:active {
+    background: #e3f2fd;
+    border-color: var(--primary);
+    transform: scale(0.98);
+}
+
+.measure-icon {
+    font-size: 4rem;
+}
+
+.measure-text {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.measure-sub {
+    font-size: 1rem;
+    color: var(--text-secondary);
+}
+
+/* Camera View */
+#cameraView {
+    position: relative;
+    flex: 1;
+    background: #000;
+}
+
+#measureVideo {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.camera-overlay-instructions {
+    position: absolute;
+    top: 20px;
+    left: 0;
+    width: 100%;
+    text-align: center;
+    color: white;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+    font-size: 1.2rem;
+    font-weight: 600;
+    z-index: 10;
+}
+
+.camera-controls {
+    position: absolute;
+    bottom: 40px;
+    left: 0;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    z-index: 10;
+}
+
+.capture-btn {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    background: white;
+    border: 4px solid var(--primary);
+    font-size: 2.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+
+/* Photo Review */
+#photoReview {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.photo-container {
+    position: relative;
+    flex: 1;
+    overflow: hidden;
+    background: #000;
+}
+
+#reviewPhoto {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.corner-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+.corner-dot {
+    fill: var(--danger);
+    stroke: white;
+    stroke-width: 2;
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
+}
+
+.corner-line {
+    stroke: var(--primary);
+    stroke-width: 3;
+    stroke-dasharray: 5, 5;
+    fill: none;
+    opacity: 0.8;
+}
+
+.review-controls {
+    padding: 16px;
+    background: white;
+    box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
+}
+
+.review-controls p {
+    text-align: center;
+    font-size: 1.2rem;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: var(--text-primary);
+}
+
+.review-buttons {
+    display: flex;
+    gap: 12px;
+}
+
+.review-buttons .btn {
+    flex: 1;
+    height: 56px;
+    font-size: 1.1rem;
+}

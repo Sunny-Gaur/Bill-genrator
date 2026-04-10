@@ -162,6 +162,56 @@
             </aside>
         </main>
 
+        <!-- Room Measurement Overlay -->
+        <div class="measurement-overlay" id="measurementOverlay" style="display: none;">
+            <div class="measurement-header">
+                <h2 id="measurementTitle">📏 Room Naapo</h2>
+                <button class="close-measure-btn" id="closeMeasureBtn">✕</button>
+            </div>
+            
+            <!-- Measurement Choices -->
+            <div id="measureChoices" class="measure-choices">
+                <button class="measure-card" onclick="startCameraMeasure()">
+                    <div class="measure-icon">📷</div>
+                    <div class="measure-text">Camera se naapo</div>
+                    <div class="measure-sub">Sabse sahi tarika</div>
+                </button>
+                <button class="measure-card" onclick="enterManualMeasure()">
+                    <div class="measure-icon">✋</div>
+                    <div class="measure-text">Khud likho</div>
+                    <div class="measure-sub">Lambai, chaudai type karo</div>
+                </button>
+            </div>
+
+            <!-- Camera View -->
+            <div id="cameraView" style="display: none;">
+                <video id="measureVideo" autoplay playsinline></video>
+                <div class="camera-overlay-instructions">
+                    <p id="cameraInstruction">Room ki photo lo</p>
+                </div>
+                <div class="camera-controls">
+                    <button id="captureBtn" class="capture-btn">📸</button>
+                </div>
+            </div>
+
+            <!-- Photo Review & Corner Marking -->
+            <div id="photoReview" style="display: none;">
+                <div class="photo-container" id="photoContainer">
+                    <img id="reviewPhoto" src="" alt="Room">
+                    <svg id="cornerSvg" class="corner-overlay">
+                        <!-- Dots will be added here -->
+                    </svg>
+                </div>
+                <div class="review-controls">
+                    <p id="cornerInstruction">Charo kone par tap karo (1/4)</p>
+                    <div class="review-buttons">
+                        <button class="btn btn-secondary" onclick="retakePhoto()">🔄 Dubara lo</button>
+                        <button class="btn btn-primary" id="confirmCornersBtn" onclick="calculateRoomArea()" disabled>✅ Area calculate karo</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div class="modal" id="savedBillsModal">
             <div class="modal-content">
                 <div class="modal-header">

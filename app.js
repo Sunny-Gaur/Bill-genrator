@@ -96,8 +96,25 @@ const QuestionFlow = {
         inputType: 'upload', next: 'roomDimensions'
     },
     roomDimensions: {
-        question: { en: "Length aur Breadth kya hai? (bol: 12 by 14)", hi: "Room ki lambai aur chaurai kya hai? (bolo: 12 by 14)" },
+        question: { en: "How to measure room?", hi: "Room kaise naapna hai?" },
+        inputType: 'measurementChoice', next: 'roomDimensionsManual'
+    },
+    measurementChoice: {
+        question: null,
+        inputType: 'measurementChoice',
+        next: 'roomDimensionsManual'
+    },
+    roomDimensionsManual: {
+        question: { en: "Length aur Breadth? (bolo: 12 by 14)", hi: "Lambai aur Chaudai? (bolo: 12 by 14)" },
         inputType: 'dimensions', next: 'tileType'
+    },
+    roomPhotoCapture: {
+        question: { en: "Take room photo", hi: "Room ki photo lo" },
+        inputType: 'camera', next: 'markCorners'
+    },
+    markCorners: {
+        question: { en: "Tap 4 corners", hi: "Charo kone par tap karo" },
+        inputType: 'corners', next: 'roomDimensionsManual'
     },
     tileType: {
         question: { en: "Tile size?", hi: "Tile size kya hai?" },
@@ -258,7 +275,27 @@ document.addEventListener('DOMContentLoaded', () => {
     initVoiceRecognition();
     initEventListeners();
     selectLanguage('hi');
+
+    // Load voice output preference
+    const savedVoicePref = localStorage.getItem('voiceOutputEnabled');
+    if (savedVoicePref !== null) {
+        AppState.voiceOutputEnabled = savedVoicePref === 'true';
+        if (DOM.voiceOutputBtn) {
+            DOM.voiceOutputBtn.classList.toggle('active', AppState.voiceOutputEnabled);
+        }
+    }
 });
+
+// ===== XSS Prevention =====
+function sanitizeHTML(str) {
+    if (typeof str !== 'string') return str;
+    return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#x27;');
+}
 
 // ===== Utility Functions =====
 function getQuestion(key) {
@@ -384,7 +421,8 @@ function addMessage(content, type = 'system') {
     const avatarSvg = type === 'system'
         ? '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>'
         : '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>';
-    messageEl.innerHTML = `<div class="message-avatar">${avatarSvg}</div><div class="message-content"><div class="message-bubble">${content}</div></div>`;
+    const safeContent = type === 'user' ? sanitizeHTML(content) : content;
+    messageEl.innerHTML = `<div class="message-avatar">${avatarSvg}</div><div class="message-content"><div class="message-bubble">${safeContent}</div></div>`;
     DOM.chatMessages.appendChild(messageEl);
     DOM.chatMessages.scrollTop = DOM.chatMessages.scrollHeight;
 }
@@ -459,6 +497,11 @@ function showQuestion(stepKey) {
         clearQuickButtons();
         clearPhoneConfirmBtn();
         showImageUploadUI();
+    } else if (step.inputType === 'measurementChoice') {
+        clearQuickButtons();
+        clearPhoneConfirmBtn();
+        openMeasurementOverlay();
+        return;
     } else {
         clearQuickButtons();
         clearPhoneConfirmBtn();
@@ -498,6 +541,7 @@ function toggleVoiceOutput() {
     if (DOM.voiceOutputBtn) {
         DOM.voiceOutputBtn.classList.toggle('active', AppState.voiceOutputEnabled);
     }
+    localStorage.setItem('voiceOutputEnabled', AppState.voiceOutputEnabled);
 }
 
 function handleQuickButton(value) {
@@ -555,24 +599,26 @@ function handleTextInput() {
 
 function parseDimensions(input) {
     const text = input.toLowerCase().trim();
-    
-    // Patterns: "12 by 14", "12x14", "12 14", "12-14"
+
+    // Patterns: "12 by 14", "12x14" (ordered by specificity)
     const patterns = [
-        /(\d+)\s*(?:by|x|×|✕|‐|\-)\s*(\d+)/i,
-        /(\d+)\s+(\d+)/,
-        /(\d+)\s*(?:by|x|×|✕|‐|\-)\s*(\d+)/i
+        /(\d+)\s*(?:by|x|×|✕|‐|\-)\s*(\d+)/i,  // Most specific: 12 by 14, 12x14
+        /(\d+)\s+(\d+)/  // Least specific: 12 14 (must be last)
     ];
-    
+
     for (const pattern of patterns) {
         const match = text.match(pattern);
         if (match) {
-            return {
-                length: parseFloat(match[1]),
-                breadth: parseFloat(match[2])
-            };
+            const length = parseFloat(match[1]);
+            const breadth = parseFloat(match[2]);
+
+            // Validate reasonable room dimensions (0-500 feet)
+            if (length > 0 && length <= 500 && breadth > 0 && breadth <= 500) {
+                return { length, breadth };
+            }
         }
     }
-    
+
     // Try Hindi word numbers
     const hindiNums = {
         'एक': 1, 'दो': 2, 'तीन': 3, 'चार': 4, 'पांच': 5,
@@ -584,7 +630,7 @@ function parseDimensions(input) {
         'gyarah': 11, 'barah': 12, 'tera': 13, 'chaudah': 14, 'pandrah': 15,
         'solah': 16, 'satrah': 17, 'atharah': 18, 'unis': 19, 'bees': 20
     };
-    
+
     const words = text.split(/\s+/);
     const nums = [];
     for (const word of words) {
@@ -596,11 +642,17 @@ function parseDimensions(input) {
             nums.push(parseInt(digitMatch[0]));
         }
     }
-    
+
     if (nums.length >= 2) {
-        return { length: nums[0], breadth: nums[1] };
+        const length = nums[0];
+        const breadth = nums[1];
+        
+        // Validate reasonable room dimensions
+        if (length > 0 && length <= 500 && breadth > 0 && breadth <= 500) {
+            return { length, breadth };
+        }
     }
-    
+
     return null;
 }
 
@@ -669,6 +721,11 @@ function showImageUploadUI() {
                     const jpegData = canvas.toDataURL('image/jpeg', 0.8);
                     
                     // Save image to room
+                    const MAX_IMAGE_SIZE = 2 * 1024 * 1024; // 2MB in bytes (approx base64 chars)
+                    if (jpegData.length > MAX_IMAGE_SIZE) {
+                        showToast('Image too large. Max 2MB allowed.', 'error');
+                        return;
+                    }
                     ensureCurrentRoom();
                     AppState.bill.floors[AppState.currentFloorIndex].rooms[AppState.bill.currentRoomIndex].imageData = jpegData;
                     
@@ -786,10 +843,10 @@ function showFinalSummary() {
             roomDetails += `
                 <div style="margin-bottom:15px;padding:10px;background:#f5f5f5;border-radius:8px;">
                     ${roomImageHtml}
-                    <div style="font-weight:600;margin-bottom:5px;">${room.name} (${floor.name})</div>
+                    <div style="font-weight:600;margin-bottom:5px;">${sanitizeHTML(room.name)} (${sanitizeHTML(floor.name)})</div>
                     <div style="font-size:0.85rem;color:#666;">
                         <div>Size: ${room.length}' x ${room.breadth}' = ${area} sq ft</div>
-                        <div>Tile: ${room.tileType} | Work: ${workLabel}</div>
+                        <div>Tile: ${sanitizeHTML(room.tileType)} | Work: ${workLabel}</div>
                     </div>
                     <table style="width:100%;margin-top:8px;font-size:0.85rem;">
                         ${costs.floorMaterial > 0 ? `
@@ -807,8 +864,8 @@ function showFinalSummary() {
     
     addMessage(`<strong>Bill Summary</strong><br><br>
         <div style="text-align:left;font-size:0.9rem;">
-            <div style="margin-bottom:10px;"><strong>Customer:</strong> ${AppState.bill.customer.name}</div>
-            <div style="margin-bottom:10px;"><strong>Phone:</strong> ${AppState.bill.customer.phone}</div>
+            <div style="margin-bottom:10px;"><strong>Customer:</strong> ${sanitizeHTML(AppState.bill.customer.name)}</div>
+            <div style="margin-bottom:10px;"><strong>Phone:</strong> ${sanitizeHTML(AppState.bill.customer.phone)}</div>
             ${roomDetails}
             ${totals.skirtingCost > 0 ? `<div style="padding:10px;background:#e8f5e9;border-radius:8px;margin-bottom:10px;"><strong>Skirting:</strong> ${AppState.bill.extras.skirting.length} ft x ${rates.skirting} = ${formatCurrency(totals.skirtingCost)}</div>` : ''}
             ${totals.holeCost > 0 ? `<div style="padding:10px;background:#e8f5e9;border-radius:8px;margin-bottom:10px;"><strong>Hole Fittings:</strong> ${AppState.bill.extras.holes.count} x ${rates.hole} = ${formatCurrency(totals.holeCost)}</div>` : ''}
@@ -841,8 +898,8 @@ function updatePreview() {
     let html = '';
     if (AppState.bill.customer.name) {
         html += `<div style="margin-bottom:16px;padding:12px;background:var(--background);border-radius:8px;">
-            <h4 style="font-size:0.875rem;font-weight:600;margin-bottom:4px;">${AppState.bill.customer.name}</h4>
-            <p style="font-size:0.75rem;color:var(--text-secondary);">${AppState.bill.customer.phone || 'No phone'}</p>
+            <h4 style="font-size:0.875rem;font-weight:600;margin-bottom:4px;">${sanitizeHTML(AppState.bill.customer.name)}</h4>
+            <p style="font-size:0.75rem;color:var(--text-secondary);">${sanitizeHTML(AppState.bill.customer.phone) || 'No phone'}</p>
         </div>`;
     }
 
@@ -854,7 +911,7 @@ function updatePreview() {
 
         html += `<div class="floor-card ${fi === 0 ? 'expanded' : ''}" data-floor="${fi}">
             <div class="floor-header" onclick="this.parentElement.classList.toggle('expanded')">
-                <div class="floor-title"><span class="floor-title-icon">${fi + 1}</span>${floor.name}</div>
+                <div class="floor-title"><span class="floor-title-icon">${fi + 1}</span>${sanitizeHTML(floor.name)}</div>
                 <div style="display:flex;align-items:center;gap:8px;">
                     <span style="font-size:0.75rem;color:var(--text-secondary);">${floor.rooms.length} rooms</span>
                     <svg class="floor-expand-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/></svg>
@@ -873,14 +930,14 @@ function updatePreview() {
                     ${roomImageHtml}
                     ${editBtn}
                     <div class="room-item-header">
-                        <span class="room-item-name">${room.name || 'Room ' + (ri + 1)}</span>
+                        <span class="room-item-name">${sanitizeHTML(room.name) || 'Room ' + (ri + 1)}</span>
                         <span class="room-item-area" style="background:#1e88e5;color:white;padding:2px 8px;border-radius:4px;">${formatCurrency(costs.roomTotal)}</span>
                     </div>
                     <div style="font-size:0.8rem;color:#666;margin:5px 0;">
                         <span>${room.length}' x ${room.breadth}' = ${area} sq ft</span>
                     </div>
                     <div class="room-item-details">
-                        <span class="room-item-tag">${room.tileType || 'No tile'}</span>
+                        <span class="room-item-tag">${sanitizeHTML(room.tileType) || 'No tile'}</span>
                         <span class="room-item-tag">${room.workType === 'floor' ? 'Floor' : room.workType === 'wall' ? 'Wall' : room.workType === 'both' ? 'Floor+Wall' : 'No work'}</span>
                         ${room.notes ? `<span class="room-item-tag" style="background:#fff3e0;">Note</span>` : ''}
                     </div>
@@ -913,7 +970,7 @@ function editRoom(roomIndex, floorIndex) {
             
             <div style="margin-bottom:15px;">
                 <label style="display:block;margin-bottom:5px;font-weight:500;">Room Name</label>
-                <input type="text" id="editRoomName" value="${room.name}" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:1rem;">
+                <input type="text" id="editRoomName" value="${sanitizeHTML(room.name)}" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:1rem;">
             </div>
             
             <div style="display:flex;gap:15px;margin-bottom:15px;">
@@ -953,7 +1010,7 @@ function editRoom(roomIndex, floorIndex) {
             
             <div style="margin-bottom:20px;">
                 <label style="display:block;margin-bottom:5px;font-weight:500;">Notes</label>
-                <textarea id="editRoomNotes" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:1rem;min-height:80px;">${room.notes || ''}</textarea>
+                <textarea id="editRoomNotes" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:1rem;min-height:80px;">${sanitizeHTML(room.notes || '')}</textarea>
             </div>
             
             <div style="display:flex;gap:10px;justify-content:flex-end;">
@@ -1089,9 +1146,17 @@ function getAllBills() {
 function deleteBill(id) {
     try {
         const bills = JSON.parse(localStorage.getItem('thikaidar_bills') || '{}');
-        delete bills[id];
-        localStorage.setItem('thikaidar_bills', JSON.stringify(bills));
-    } catch (e) {}
+        if (bills[id]) {
+            delete bills[id];
+            localStorage.setItem('thikaidar_bills', JSON.stringify(bills));
+            showToast('Bill deleted successfully', 'success');
+        } else {
+            showToast('Bill not found', 'error');
+        }
+    } catch (e) {
+        console.error('Delete error:', e);
+        showToast('Failed to delete bill: ' + e.message, 'error');
+    }
 }
 
 // ===== Modal Functions =====
@@ -1103,7 +1168,7 @@ function showSavedBills() {
         DOM.savedBillsList.innerHTML = bills.map(bill => `
             <div class="saved-bill-item" data-id="${bill.id}">
                 <div class="saved-bill-info">
-                    <h4>${bill.customer.name || 'Unnamed'}</h4>
+                    <h4>${sanitizeHTML(bill.customer.name) || 'Unnamed'}</h4>
                     <p>${bill.floors.length} floor(s) | ${new Date(bill.updatedAt).toLocaleDateString()}</p>
                 </div>
                 <div class="saved-bill-actions">
@@ -1142,13 +1207,13 @@ function loadBill(id) {
         return;
     }
     AppState.bill = bill;
-    AppState.currentStep = 'finalSummary';
+    AppState.currentStep = 'complete';
     DOM.welcomeScreen.style.display = 'none';
     DOM.chatMessages.style.display = 'flex';
     DOM.inputArea.style.display = 'none';
     DOM.progressContainer.style.display = 'none';
     DOM.previewFooter.style.display = 'block';
-    addMessage(`<strong>Bill loaded:</strong> ${bill.customer.name}`, 'system');
+    addMessage(`<strong>Bill loaded:</strong> ${sanitizeHTML(bill.customer.name)}`, 'system');
     const totals = calculateTotalCosts();
     DOM.grandTotal.textContent = formatCurrency(totals.grandTotal);
     updatePreview();
@@ -1177,9 +1242,9 @@ function showFullBill() {
                     </button>
                     ${roomImageHtml}
                     <div style="font-weight:bold;font-size:1.1rem;margin-bottom:10px;color:#1e88e5;">
-                        ${floor.name} - ${room.name}
+                        ${sanitizeHTML(floor.name)} - ${sanitizeHTML(room.name)}
                     </div>
-                    ${room.notes ? `<div style="background:#fff3e0;padding:8px 12px;border-radius:6px;margin-bottom:10px;font-size:0.85rem;"><strong>Note:</strong> ${room.notes}</div>` : ''}
+                    ${room.notes ? `<div style="background:#fff3e0;padding:8px 12px;border-radius:6px;margin-bottom:10px;font-size:0.85rem;"><strong>Note:</strong> ${sanitizeHTML(room.notes)}</div>` : ''}
                     <table style="width:100%;border-collapse:collapse;">
                         <tr style="background:#eee;">
                             <th style="padding:8px;border:1px solid #ddd;text-align:left;">Description</th>
@@ -1191,7 +1256,7 @@ function showFullBill() {
                         </tr>
                         ${costs.floorMaterial > 0 ? `
                         <tr>
-                            <td style="padding:8px;border:1px solid #ddd;">Floor Tile (${room.tileType})</td>
+                            <td style="padding:8px;border:1px solid #ddd;">Floor Tile (${sanitizeHTML(room.tileType)})</td>
                             <td style="padding:8px;border:1px solid #ddd;text-align:right;">${room.length}'</td>
                             <td style="padding:8px;border:1px solid #ddd;text-align:right;">${room.breadth}'</td>
                             <td style="padding:8px;border:1px solid #ddd;text-align:right;">${area} sq ft</td>
@@ -1200,7 +1265,7 @@ function showFullBill() {
                         </tr>` : ''}
                         ${costs.wallMaterial > 0 ? `
                         <tr>
-                            <td style="padding:8px;border:1px solid #ddd;">Wall Tile (${room.tileType})</td>
+                            <td style="padding:8px;border:1px solid #ddd;">Wall Tile (${sanitizeHTML(room.tileType)})</td>
                             <td style="padding:8px;border:1px solid #ddd;text-align:right;">${room.length}'</td>
                             <td style="padding:8px;border:1px solid #ddd;text-align:right;">${room.breadth}'</td>
                             <td style="padding:8px;border:1px solid #ddd;text-align:right;">${area} sq ft</td>
@@ -1222,7 +1287,7 @@ function showFullBill() {
         <div style="margin-bottom:20px;">
             ${bill.customNotes.map(note => `
                 <div style="background:#fff3e0;padding:10px;border-radius:8px;margin-bottom:8px;">
-                    ${note.text}
+                    ${sanitizeHTML(note.text)}
                 </div>
             `).join('')}
         </div>
@@ -1239,10 +1304,10 @@ function showFullBill() {
             </div>
             <div class="bill-customer">
                 <h3>Customer Details</h3>
-                <p><strong>Name:</strong> ${bill.customer.name}</p>
-                <p><strong>Phone:</strong> ${bill.customer.phone}</p>
-                <p><strong>Address:</strong> ${bill.customer.address}</p>
-                <p><strong>House No:</strong> ${bill.customer.houseNumber}</p>
+                <p><strong>Name:</strong> ${sanitizeHTML(bill.customer.name)}</p>
+                <p><strong>Phone:</strong> ${sanitizeHTML(bill.customer.phone)}</p>
+                <p><strong>Address:</strong> ${sanitizeHTML(bill.customer.address)}</p>
+                <p><strong>House No:</strong> ${sanitizeHTML(bill.customer.houseNumber)}</p>
             </div>
             
             <div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;">
@@ -1258,7 +1323,7 @@ function showFullBill() {
             <div style="margin-top:15px;padding:15px;background:#e8f5e9;border-radius:8px;">
                 <strong>Skirting:</strong> ${bill.extras.skirting.length} ft x ${rates.skirting} = ${formatCurrency(totals.skirtingCost)}
             </div>` : ''}
-            
+
             ${totals.holeCost > 0 ? `
             <div style="margin-top:10px;padding:15px;background:#e8f5e9;border-radius:8px;">
                 <strong>Hole Fittings:</strong> ${bill.extras.holes.count} x ${rates.hole} = ${formatCurrency(totals.holeCost)}
@@ -1282,235 +1347,267 @@ function printBill() {
 
 async function exportPdf() {
     showToast('Generating PDF...', 'info');
-    
+
     try {
         const { jsPDF } = window.jspdf;
         const doc = new jsPDF('p', 'mm', 'a4');
         const pageWidth = doc.internal.pageSize.getWidth();
         const pageHeight = doc.internal.pageSize.getHeight();
         const margin = 15;
+        const contentWidth = pageWidth - 2 * margin;
         let yPos = margin;
-        
+
         const bill = AppState.bill;
         const totals = calculateTotalCosts();
         const rates = bill.rates;
-        
-        // Header
+
+        // ===== HEADER =====
         doc.setFillColor(30, 136, 229);
         doc.rect(0, 0, pageWidth, 35, 'F');
-        
         doc.setTextColor(255, 255, 255);
         doc.setFontSize(24);
         doc.setFont('helvetica', 'bold');
         doc.text('THIKAI DAR', margin, 18);
-        
         doc.setFontSize(10);
         doc.setFont('helvetica', 'normal');
         doc.text('Professional Tile Work Billing', margin, 26);
-        
-        // Bill Info (right side)
         doc.setFontSize(10);
         doc.text(`Bill No: ${bill.id.substring(0, 8).toUpperCase()}`, pageWidth - margin - 60, 15);
         doc.text(`Date: ${new Date(bill.createdAt).toLocaleDateString()}`, pageWidth - margin - 60, 22);
-        
+
         yPos = 45;
-        
-        // Customer Details
+
+        // ===== CUSTOMER DETAILS =====
         doc.setTextColor(30, 136, 229);
         doc.setFontSize(12);
         doc.setFont('helvetica', 'bold');
         doc.text('Customer Details', margin, yPos);
         yPos += 8;
-        
         doc.setTextColor(50, 50, 50);
         doc.setFontSize(10);
         doc.setFont('helvetica', 'normal');
-        doc.text(`Name: ${bill.customer.name}`, margin, yPos);
-        yPos += 6;
-        doc.text(`Phone: ${bill.customer.phone}`, margin, yPos);
-        yPos += 6;
-        doc.text(`Address: ${bill.customer.address}`, margin, yPos);
-        yPos += 6;
+        doc.text(`Name: ${bill.customer.name}`, margin, yPos); yPos += 6;
+        doc.text(`Phone: ${bill.customer.phone}`, margin, yPos); yPos += 6;
+        doc.text(`Address: ${bill.customer.address}`, margin, yPos); yPos += 6;
         doc.text(`House No: ${bill.customer.houseNumber}`, margin, yPos);
         yPos += 12;
-        
-        // Room Details
+
+        // ===== ROOM DETAILS =====
         doc.setTextColor(30, 136, 229);
         doc.setFontSize(12);
         doc.setFont('helvetica', 'bold');
         doc.text('Room Details', margin, yPos);
         yPos += 10;
-        
-        bill.floors.forEach((floor, fi) => {
-            floor.rooms.forEach((room, ri) => {
+
+        bill.floors.forEach((floor) => {
+            floor.rooms.forEach((room) => {
+                const area = calculateRoomArea(room);
+                const costs = calculateRoomCosts(room, rates);
+
+                // Calculate minimum height needed for this room section
+                let roomBlockHeight = 30; // header + details
+                if (costs.floorMaterial > 0) roomBlockHeight += 8;
+                if (costs.wallMaterial > 0) roomBlockHeight += 8;
+                roomBlockHeight += 8; // room total row
+                if (room.notes) roomBlockHeight += 10;
+                roomBlockHeight += 5; // bottom spacing
+
                 // Check if we need a new page
-                if (yPos > pageHeight - 100) {
+                if (yPos + roomBlockHeight > pageHeight - margin) {
                     doc.addPage();
                     yPos = margin;
                 }
-                
-                const area = calculateRoomArea(room);
-                const costs = calculateRoomCosts(room, rates);
-                
-                // Image section (left side)
-                let imgBottomY = yPos;
-                if (room.imageData) {
+
+                const roomStartY = yPos;
+                const hasImage = !!room.imageData;
+                const imgWidth = 40;
+                const imgHeight = 32;
+
+                // Draw room image if present
+                if (hasImage) {
                     try {
-                        const imgWidth = 45;
-                        const imgHeight = 35;
                         const imgFormat = room.imageData.indexOf('data:image/png') !== -1 ? 'PNG' : 'JPEG';
                         doc.addImage(room.imageData, imgFormat, margin, yPos, imgWidth, imgHeight);
-                        imgBottomY = yPos + imgHeight + 4;
                     } catch (imgError) {
                         console.log('Could not add image:', imgError);
-                        imgBottomY = yPos;
                     }
                 }
-                
-                // Room header (move right if image exists)
-                const textStartX = room.imageData ? margin + 55 : margin;
-                
-                doc.setFillColor(240, 240, 240);
-                doc.rect(margin, imgBottomY, pageWidth - 2 * margin, 8, 'F');
-                
+
+                // Room header - positioned to the right of image, or at margin if no image
+                const textStartX = hasImage ? margin + imgWidth + 5 : margin;
+                const headerWidth = contentWidth - (hasImage ? imgWidth + 5 : 0);
+
+                doc.setFillColor(227, 242, 253);
+                doc.rect(textStartX, yPos, headerWidth, 8, 'F');
                 doc.setTextColor(30, 136, 229);
                 doc.setFontSize(11);
                 doc.setFont('helvetica', 'bold');
-                doc.text(`${floor.name} - ${room.name}`, textStartX + 2, imgBottomY + 5);
-                
-                const afterHeaderY = imgBottomY + 12;
-                
-                // Room details
+                doc.text(`${floor.name} - ${room.name}`, textStartX + 2, yPos + 5.5, { align: 'left' });
+                yPos += 12;
+
+                // Room details (left-aligned)
                 doc.setTextColor(50, 50, 50);
                 doc.setFontSize(9);
                 doc.setFont('helvetica', 'normal');
-                
-                doc.text(`Size: ${room.length}' x ${room.breadth}' = ${area} sq ft`, textStartX, afterHeaderY);
-                yPos = afterHeaderY + 6;
-                doc.text(`Tile: ${room.tileType} | Work: ${room.workType === 'both' ? 'Floor + Wall' : room.workType}`, textStartX, yPos);
-                
-                yPos += 10;
-                
+                doc.text(`Size: ${room.length}' x ${room.breadth}' = ${area} sq ft`, textStartX, yPos);
+                yPos += 6;
+                doc.text(`Tile: ${room.tileType}  |  Work: ${room.workType === 'both' ? 'Floor + Wall' : room.workType}`, textStartX, yPos);
+                yPos += 8;
+
+                // Ensure image and room content end at same Y level
+                if (hasImage) {
+                    const imgBottom = roomStartY + imgHeight;
+                    if (yPos < imgBottom + 4) {
+                        yPos = imgBottom + 4;
+                    }
+                }
+
+                // Table column positions (always full width)
+                const colDesc = margin + 2;
+                const colArea = margin + 55;
+                const colRate = margin + 95;
+                const colAmount = pageWidth - margin - 10;
+
                 // Table header
                 doc.setFillColor(230, 230, 230);
-                doc.rect(margin, yPos - 3, pageWidth - 2 * margin, 6, 'F');
+                doc.rect(margin, yPos, contentWidth, 7, 'F');
                 doc.setFontSize(8);
-                doc.text('Description', margin + 2, yPos);
-                doc.text('Area', margin + 60, yPos);
-                doc.text('Rate', margin + 90, yPos);
-                doc.text('Amount', pageWidth - margin - 20, yPos);
-                yPos += 6;
-                
+                doc.setFont('helvetica', 'bold');
+                doc.text('Description', colDesc, yPos + 5);
+                doc.text('Area', colArea, yPos + 5);
+                doc.text('Rate', colRate, yPos + 5);
+                doc.text('Amount', colAmount, yPos + 5, { align: 'right' });
+                doc.setFont('helvetica', 'normal');
+                yPos += 9;
+
                 // Floor tile row
                 if (costs.floorMaterial > 0) {
-                    doc.text('Floor Tile', margin + 2, yPos);
-                    doc.text(`${area} sq ft`, margin + 60, yPos);
-                    doc.text(`${costs.floorRate}`, margin + 90, yPos);
-                    doc.text(formatCurrency(costs.floorMaterial), pageWidth - margin - 20, yPos);
-                    yPos += 5;
+                    doc.text('Floor Tile', colDesc, yPos);
+                    doc.text(`${area} sq ft`, colArea, yPos);
+                    doc.text(String(costs.floorRate), colRate, yPos);
+                    doc.text(formatCurrency(costs.floorMaterial), colAmount, yPos, { align: 'right' });
+                    yPos += 7;
                 }
-                
+
                 // Wall tile row
                 if (costs.wallMaterial > 0) {
-                    doc.text('Wall Tile', margin + 2, yPos);
-                    doc.text(`${area} sq ft`, margin + 60, yPos);
-                    doc.text(`${costs.wallRate}`, margin + 90, yPos);
-                    doc.text(formatCurrency(costs.wallMaterial), pageWidth - margin - 20, yPos);
-                    yPos += 5;
+                    doc.text('Wall Tile', colDesc, yPos);
+                    doc.text(`${area} sq ft`, colArea, yPos);
+                    doc.text(String(costs.wallRate), colRate, yPos);
+                    doc.text(formatCurrency(costs.wallMaterial), colAmount, yPos, { align: 'right' });
+                    yPos += 7;
                 }
-                
+
                 // Room total row
                 doc.setFillColor(227, 242, 253);
-                doc.rect(margin, yPos - 3, pageWidth - 2 * margin, 6, 'F');
+                doc.rect(margin, yPos, contentWidth, 7, 'F');
+                doc.setFontSize(9);
                 doc.setFont('helvetica', 'bold');
-                doc.text('Room Total:', margin + 2, yPos);
-                doc.text(formatCurrency(costs.roomTotal), pageWidth - margin - 20, yPos);
-                yPos += 8;
-                
+                doc.text('Room Total:', colDesc, yPos + 5);
+                doc.text(formatCurrency(costs.roomTotal), colAmount, yPos + 5, { align: 'right' });
+                doc.setFont('helvetica', 'normal');
+                yPos += 10;
+
                 // Room notes
                 if (room.notes) {
                     doc.setFillColor(255, 243, 224);
-                    doc.rect(margin, yPos - 3, pageWidth - 2 * margin, 7, 'F');
-                    doc.setFont('helvetica', 'normal');
+                    doc.rect(margin, yPos, contentWidth, 8, 'F');
                     doc.setFontSize(8);
                     doc.setTextColor(100, 60, 0);
-                    doc.text('Note: ' + room.notes, margin + 2, yPos + 2);
-                    yPos += 10;
-                } else {
-                    yPos += 4;
+                    doc.text('Note: ' + room.notes, margin + 2, yPos + 5);
+                    doc.setTextColor(50, 50, 50);
+                    yPos += 11;
                 }
             });
         });
-        
-        // Custom Notes
+
+        // ===== EXTRAS (Skirting, Holes) =====
+        let hasExtras = totals.skirtingCost > 0 || totals.holeCost > 0;
+        if (hasExtras) {
+            if (yPos > pageHeight - margin - 30) {
+                doc.addPage();
+                yPos = margin;
+            }
+            doc.setFontSize(9);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(50, 50, 50);
+            if (totals.skirtingCost > 0) {
+                doc.text(`Skirting: ${bill.extras.skirting.length} ft x ${rates.skirting} = ${formatCurrency(totals.skirtingCost)}`, margin, yPos);
+                yPos += 6;
+            }
+            if (totals.holeCost > 0) {
+                doc.text(`Hole Fittings: ${bill.extras.holes.count} x ${rates.hole} = ${formatCurrency(totals.holeCost)}`, margin, yPos);
+                yPos += 6;
+            }
+            yPos += 3;
+        }
+
+        // ===== CUSTOM NOTES =====
         if (bill.customNotes && bill.customNotes.length > 0) {
-            if (yPos > pageHeight - 50) {
+            if (yPos > pageHeight - margin - bill.customNotes.length * 12) {
                 doc.addPage();
                 yPos = margin;
             }
             doc.setTextColor(30, 136, 229);
-            doc.setFontSize(12);
+            doc.setFontSize(11);
             doc.setFont('helvetica', 'bold');
             doc.text('Notes', margin, yPos);
-            yPos += 8;
-            
+            yPos += 7;
             doc.setTextColor(100, 60, 0);
-            doc.setFontSize(9);
+            doc.setFontSize(8);
             doc.setFont('helvetica', 'normal');
             bill.customNotes.forEach(note => {
-                if (yPos > pageHeight - 20) {
+                if (yPos > pageHeight - margin - 15) {
                     doc.addPage();
                     yPos = margin;
                 }
                 doc.setFillColor(255, 243, 224);
-                doc.rect(margin, yPos - 4, pageWidth - 2 * margin, 8, 'F');
-                doc.text(note.text, margin + 2, yPos + 1);
-                yPos += 10;
+                doc.rect(margin, yPos, contentWidth, 8, 'F');
+                doc.text(note.text, margin + 2, yPos + 5);
+                doc.setTextColor(50, 50, 50);
+                yPos += 11;
             });
         }
-        
-        // Extras
-        if (yPos > pageHeight - 40) {
+
+        // ===== GRAND TOTAL =====
+        yPos += 3;
+
+        // Check if we need a new page for total
+        if (yPos > pageHeight - margin - 25) {
             doc.addPage();
             yPos = margin;
         }
-        if (totals.skirtingCost > 0) {
-            doc.setFontSize(9);
-            doc.setFont('helvetica', 'normal');
-            doc.setTextColor(50, 50, 50);
-            doc.text(`Skirting: ${bill.extras.skirting.length} ft x ${rates.skirting} = ${formatCurrency(totals.skirtingCost)}`, margin, yPos);
-            yPos += 6;
-        }
-        
-        if (totals.holeCost > 0) {
-            doc.text(`Hole Fittings: ${bill.extras.holes.count} x ${rates.hole} = ${formatCurrency(totals.holeCost)}`, margin, yPos);
-            yPos += 6;
-        }
-        
-        yPos += 5;
-        
-        // Grand Total
+
+        // Separator line
         doc.setDrawColor(30, 136, 229);
         doc.setLineWidth(0.5);
         doc.line(margin, yPos, pageWidth - margin, yPos);
         yPos += 8;
-        
+
+        // Total box background
+        doc.setFillColor(227, 242, 253);
+        doc.roundedRect(margin, yPos - 5, contentWidth, 14, 2, 2, 'F');
+
         doc.setFontSize(14);
         doc.setFont('helvetica', 'bold');
         doc.setTextColor(30, 136, 229);
-        doc.text('Grand Total:', margin, yPos);
-        doc.text(formatCurrency(totals.grandTotal), pageWidth - margin - 30, yPos);
-        
-        // Footer
-        doc.setFontSize(8);
-        doc.setTextColor(120, 120, 120);
-        doc.setFont('helvetica', 'normal');
-        doc.text('Generated by Thikaidar Bill Generator', pageWidth / 2, pageHeight - 10, { align: 'center' });
-        
+        doc.text('Grand Total:', margin + 5, yPos + 5);
+        doc.text(formatCurrency(totals.grandTotal), pageWidth - margin - 5, yPos + 5, { align: 'right' });
+
+        // ===== FOOTER =====
+        const totalPages = doc.internal.getNumberOfPages();
+        for (let i = 1; i <= totalPages; i++) {
+            doc.setPage(i);
+            doc.setFontSize(8);
+            doc.setTextColor(150, 150, 150);
+            doc.setFont('helvetica', 'normal');
+            doc.text(`Generated by Thikaidar Bill Generator  |  Page ${i} of ${totalPages}`, pageWidth / 2, pageHeight - 8, { align: 'center' });
+        }
+
         // Save the PDF
         const fileName = `Thikaidar_Bill_${bill.customer.name.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`;
         doc.save(fileName);
-        
+
         showToast('PDF downloaded!', 'success');
     } catch (error) {
         console.error('PDF Error:', error);
@@ -1671,16 +1768,19 @@ function updateInputPlaceholder() {
 }
 
 // ===== AI Integration (Free Groq) =====
-let GROQ_API_KEY = localStorage.getItem('groq_api_key') || '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';
+// SECURITY: API key must be provided by user - never hardcode keys in source code
+let GROQ_API_KEY = localStorage.getItem('groq_api_key') || '';
 
 function saveApiKey(key) {
-    GROQ_API_KEY = key;
-    localStorage.setItem('groq_api_key', key);
-}
-
-// Initialize with default key
-if (!localStorage.getItem('groq_api_key')) {
-    localStorage.setItem('groq_api_key', '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');
+    if (key && key.trim().length > 0) {
+        GROQ_API_KEY = key.trim();
+        localStorage.setItem('groq_api_key', GROQ_API_KEY);
+        return true;
+    } else {
+        GROQ_API_KEY = '';
+        localStorage.removeItem('groq_api_key');
+        return false;
+    }
 }
 
 async function getAIResponse(transcript, currentStep, options) {
@@ -2156,7 +2256,128 @@ function findMatchingOption(transcript, options) {
     if (bestMatch && bestScore > 0.4) {
         return bestMatch;
     }
-    
+
     return null;
 }
+
+// ===== Room Measurement =====
+let measurementCorners = [];
+let roomPhotoStream = null;
+
+function openMeasurementOverlay() {
+    document.getElementById('measurementOverlay').style.display = 'flex';
+    document.getElementById('measureChoices').style.display = 'flex';
+    document.getElementById('cameraView').style.display = 'none';
+    document.getElementById('photoReview').style.display = 'none';
+    speakQuestion("Room kaise naapna hai?", { lang: 'hi-IN' });
+}
+
+function closeMeasurementOverlay() {
+    document.getElementById('measurementOverlay').style.display = 'none';
+    if (roomPhotoStream) {
+        roomPhotoStream.getTracks().forEach(t => t.stop());
+        roomPhotoStream = null;
+    }
+}
+
+async function startCameraMeasure() {
+    document.getElementById('measureChoices').style.display = 'none';
+    document.getElementById('cameraView').style.display = 'flex';
+    document.getElementById('cameraInstruction').textContent = "Room ki photo lo";
+
+    try {
+        roomPhotoStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        document.getElementById('measureVideo').srcObject = roomPhotoStream;
+        speakQuestion("Room ki photo lo", { lang: 'hi-IN' });
+    } catch (e) {
+        showToast("Camera nahi chalu hua. Manual likho.", "error");
+        closeMeasurementOverlay();
+    }
+}
+
+document.getElementById('captureBtn').addEventListener('click', () => {
+    const video = document.getElementById('measureVideo');
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+
+    const dataUrl = canvas.toDataURL('image/jpeg');
+    document.getElementById('reviewPhoto').src = dataUrl;
+    document.getElementById('cameraView').style.display = 'none';
+    document.getElementById('photoReview').style.display = 'flex';
+    document.getElementById('cornerInstruction').textContent = "Charo kone par tap karo (1/4)";
+
+    measurementCorners = [];
+    updateCornerOverlay();
+    speakQuestion("Charo kone par tap karo", { lang: 'hi-IN' });
+
+    if (roomPhotoStream) {
+        roomPhotoStream.getTracks().forEach(t => t.stop());
+        roomPhotoStream = null;
+    }
+});
+
+function retakePhoto() {
+    document.getElementById('photoReview').style.display = 'none';
+    startCameraMeasure();
+}
+
+document.getElementById('photoContainer').addEventListener('click', (e) => {
+    if (measurementCorners.length >= 4) return;
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    // Normalize to percentage
+    measurementCorners.push({ x: x / rect.width, y: y / rect.height });
+    updateCornerOverlay();
+
+    if (measurementCorners.length < 4) {
+        document.getElementById('cornerInstruction').textContent = `Charo kone par tap karo (${measurementCorners.length + 1}/4)`;
+    } else {
+        document.getElementById('cornerInstruction').textContent = "Sab corners mark ho gaye! ✅";
+        document.getElementById('confirmCornersBtn').disabled = false;
+        speakQuestion("Sab corners mark ho gaye. Area calculate karo.", { lang: 'hi-IN' });
+    }
+});
+
+function updateCornerOverlay() {
+    const svg = document.getElementById('cornerSvg');
+    svg.innerHTML = '';
+
+    // Draw lines
+    if (measurementCorners.length > 1) {
+        let pathD = `M ${measurementCorners[0].x * 100}% ${measurementCorners[0].y * 100}%`;
+        for (let i = 1; i < measurementCorners.length; i++) {
+            pathD += ` L ${measurementCorners[i].x * 100}% ${measurementCorners[i].y * 100}%`;
+        }
+        svg.innerHTML += `<path d="${pathD}" class="corner-line" />`;
+    }
+
+    // Draw dots
+    measurementCorners.forEach((c, i) => {
+        svg.innerHTML += `<circle cx="${c.x * 100}%" cy="${c.y * 100}%" r="8" class="corner-dot" />`;
+        svg.innerHTML += `<text x="${c.x * 100}%" y="${c.y * 100}%" fill="white" font-size="12" text-anchor="middle" dominant-baseline="middle">${i + 1}</text>`;
+    });
+}
+
+function calculateRoomArea() {
+    closeMeasurementOverlay();
+
+    // Trigger manual input for verification/calibration
+    AppState.currentStep = 'roomDimensionsManual';
+    showQuestion('roomDimensionsManual');
+    showToast("Ab ek deewar ki lambai batao (feet mein)", "info");
+    speakQuestion("Ab ek deewar ki lambai batao", { lang: 'hi-IN' });
+}
+
+function enterManualMeasure() {
+    closeMeasurementOverlay();
+    AppState.currentStep = 'roomDimensionsManual';
+    showQuestion('roomDimensionsManual');
+}
+
+document.getElementById('closeMeasureBtn').addEventListener('click', closeMeasurementOverlay);
 

@@ -25,3 +25,18 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.bak
+
+# Qwen AI temporary files
+.qwen/
+*.md.bak
+
+# Screenshots & Test Images
+*.png
+*.jpg
+*.jpeg
+*.gif
+screenshots/
+test-images/
+
+# Clipboard files
+clipboard/
