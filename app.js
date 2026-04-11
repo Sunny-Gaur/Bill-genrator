@@ -472,6 +472,16 @@ function startNewBill() {
 
 function showQuestion(stepKey) {
     console.log('[DEBUG showQuestion] stepKey:', stepKey);
+    
+    // Prevent showing dimension question if dimensions are already saved
+    if (stepKey === 'roomDimensions' || stepKey === 'roomDimensionsManual') {
+        const currentRoom = getCurrentRoom();
+        if (currentRoom && currentRoom.length > 0 && currentRoom.breadth > 0) {
+            console.log('[DEBUG showQuestion] Dimensions already saved, skipping to tileType');
+            stepKey = 'tileType';
+        }
+    }
+    
     const step = QuestionFlow[stepKey];
     if (!step) {
         console.log('[DEBUG showQuestion] Step not found in QuestionFlow!');
