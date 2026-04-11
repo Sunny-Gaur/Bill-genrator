@@ -509,32 +509,40 @@ function showQuestion(stepKey) {
 
     if (step.inputType === 'quick' && step.options) {
         renderQuickButtons(step.options);
+        // Clear input for quick button selection
+        DOM.textInput.value = '';
+        DOM.textInput.placeholder = AppState.language === 'hi' ? 'Button dabao...' : 'Tap a button...';
+        DOM.textInput.blur();
     } else if (step.inputType === 'phone') {
         clearQuickButtons();
+        DOM.textInput.value = '';
         updateInputPlaceholder();
         DOM.textInput.focus();
         setTimeout(() => showPhoneConfirmBtn(), 100);
     } else if (step.inputType === 'dimensions') {
         clearQuickButtons();
         clearPhoneConfirmBtn();
+        DOM.textInput.value = '';
         DOM.textInput.placeholder = AppState.language === 'hi' ? '12 by 14 type karo ya bolo...' : '12 by 14 type or say...';
         DOM.textInput.focus();
     } else if (step.inputType === 'upload') {
         clearQuickButtons();
         clearPhoneConfirmBtn();
+        DOM.textInput.value = '';
         showImageUploadUI();
     } else if (step.inputType === 'measurementChoice') {
         clearQuickButtons();
         clearPhoneConfirmBtn();
+        DOM.textInput.value = '';
         openMeasurementOverlay();
         return;
     } else {
         clearQuickButtons();
         clearPhoneConfirmBtn();
+        DOM.textInput.value = '';
         updateInputPlaceholder();
+        DOM.textInput.focus();
     }
-
-    DOM.textInput.focus();
 }
 
 function speakQuestion(text, step) {
