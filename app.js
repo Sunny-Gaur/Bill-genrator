@@ -21,6 +21,9 @@ const AppState = {
     voiceTranscriptBuffer: ''
 };
 
+// Prevent duplicate question showing
+let lastShownQuestion = null;
+
 // ===== Question Flow Definitions =====
 const QuestionFlow = {
     welcome: { next: 'customerName' },
@@ -458,6 +461,7 @@ function startNewBill() {
     AppState.currentStep = 'customerName';
     AppState.currentFloorIndex = -1;
     AppState.currentRoomIndex = -1;
+    lastShownQuestion = null;
 
     DOM.welcomeScreen.style.display = 'none';
     DOM.chatMessages.style.display = 'flex';
@@ -472,7 +476,13 @@ function startNewBill() {
 
 function showQuestion(stepKey) {
     console.log('[DEBUG showQuestion] stepKey:', stepKey);
-    
+
+    // Prevent duplicate question showing
+    if (lastShownQuestion === stepKey) {
+        console.log('[DEBUG showQuestion] Question already shown, skipping duplicate');
+        return;
+    }
+
     // Prevent showing dimension question if dimensions are already saved
     if (stepKey === 'roomDimensions' || stepKey === 'roomDimensionsManual') {
         const currentRoom = getCurrentRoom();
@@ -481,7 +491,7 @@ function showQuestion(stepKey) {
             stepKey = 'tileType';
         }
     }
-    
+
     const step = QuestionFlow[stepKey];
     if (!step) {
         console.log('[DEBUG showQuestion] Step not found in QuestionFlow!');
@@ -494,6 +504,7 @@ function showQuestion(stepKey) {
     if (question) {
         addMessage(question, 'system');
         speakQuestion(question, step);
+        lastShownQuestion = stepKey;
     }
 
     if (step.inputType === 'quick' && step.options) {
