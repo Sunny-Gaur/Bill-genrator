@@ -557,12 +557,15 @@ function handleQuickButton(value) {
     processAnswer(value, step);
 }
 
+// Flag to prevent duplicate dimension processing
+let isProcessingDimensions = false;
+
 function handleTextInput() {
     let value = DOM.textInput.value.trim();
     if (!value) return;
 
     const step = QuestionFlow[AppState.currentStep];
-    
+
     if (step.inputType === 'phone') {
         const digits = value.replace(/\D/g, '');
         if (digits.length < 10) {
@@ -575,15 +578,31 @@ function handleTextInput() {
         processAnswer(digits, step);
         return;
     }
-    
+
     if (step.inputType === 'dimensions') {
+        // Prevent duplicate processing
+        if (isProcessingDimensions) {
+            console.log('[DEBUG handleTextInput] Already processing dimensions, skipping duplicate call');
+            return;
+        }
+        isProcessingDimensions = true;
+
         console.log('[DEBUG handleTextInput] Raw input value:', value);
         console.log('[DEBUG handleTextInput] Current step:', AppState.currentStep);
+
+        // Clear input immediately to prevent re-processing
+        DOM.textInput.value = '';
+
+        // Stop any active voice recognition to prevent duplicate processing
+        if (AppState.isRecording) {
+            console.log('[DEBUG handleTextInput] Stopping active voice recognition');
+            AppState.recognition.stop();
+        }
+
         const dimensions = parseDimensions(value);
         console.log('[DEBUG handleTextInput] parseDimensions returned:', dimensions);
         if (dimensions) {
             addMessage(`Length: ${dimensions.length}', Breadth: ${dimensions.breadth}'`, 'user');
-            DOM.textInput.value = '';
             // Directly save dimensions and advance to tileType
             ensureCurrentRoom();
             if (AppState.currentFloorIndex >= 0 && AppState.bill.currentRoomIndex >= 0) {
@@ -597,8 +616,10 @@ function handleTextInput() {
             console.log('[DEBUG handleTextInput] Advanced to tileType');
             updatePreview();
             showQuestion('tileType');
+            isProcessingDimensions = false;
         } else {
             showToast('Format samajh nahi aaya. Bolo: 12 by 14 ya 12 14', 'error');
+            isProcessingDimensions = false;
         }
         return;
     }
@@ -2037,15 +2058,28 @@ async function handleVoiceInput(transcript) {
     }
     
     if (step.inputType === 'dimensions') {
+        // Prevent duplicate processing
+        if (isProcessingDimensions) {
+            console.log('[DEBUG handleVoiceInput dimensions] Already processing, skipping');
+            return;
+        }
+        isProcessingDimensions = true;
+
         console.log('[DEBUG handleVoiceInput dimensions] Transcript:', transcript);
+
+        // Clear input immediately to prevent re-processing
+        DOM.textInput.value = '';
+
         const dimensions = parseDimensions(transcript);
         console.log('[DEBUG handleVoiceInput dimensions] parseDimensions returned:', dimensions);
         if (dimensions) {
             addMessage(`Length: ${dimensions.length}', Breadth: ${dimensions.breadth}'`, 'user');
             console.log('[DEBUG handleVoiceInput dimensions] Calling processAnswer with:', dimensions);
             processAnswer(dimensions, step);
+            isProcessingDimensions = false;
         } else {
             addMessage(`Suna: "${transcript}" - Samajh nahi aaya. Bolo: 12 by 14`, 'system');
+            isProcessingDimensions = false;
         }
         return;
     }
