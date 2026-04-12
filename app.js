@@ -12,7 +12,7 @@ const AppState = {
     },
     currentStep: 'welcome',
     currentFloorIndex: -1,
-    currentRoomIndex: -1,
+    currentRoomIndex: -1,   // FIXED: keep here, not on bill
     pendingConfirm: null,
     language: 'hi',
     voiceOutputEnabled: true,
@@ -149,7 +149,7 @@ const QuestionFlow = {
     floorRate: {
         question: { en: "Floor tile ki rate per sq ft?", hi: "Floor tile ki rate per sq ft?" },
         inputType: 'number',
-        saveTo: 'currentRoom.floorRate', 
+        saveTo: 'currentRoom.floorRate',
         checkNext: () => {
             const room = getCurrentRoom();
             return (room && room.workType === 'both') ? 'wallRate' : 'minusArea';
@@ -157,8 +157,8 @@ const QuestionFlow = {
     },
     wallRate: {
         question: { en: "Wall tile ki rate per sq ft?", hi: "Wall tile ki rate per sq ft?" },
-        inputType: 'number', 
-        saveTo: 'currentRoom.wallRate', 
+        inputType: 'number',
+        saveTo: 'currentRoom.wallRate',
         checkNext: () => 'minusArea'
     },
     minusArea: {
@@ -186,7 +186,7 @@ const QuestionFlow = {
         next: 'nextFloor',
         checkNext: (value) => {
             if (value === 'yes') {
-                AppState.bill.currentRoomIndex++;
+                AppState.currentRoomIndex++;  // FIXED: AppState not AppState.bill
                 return 'roomName';
             }
             return 'nextFloor';
@@ -274,12 +274,11 @@ document.addEventListener('DOMContentLoaded', () => {
         fullBillModal: document.getElementById('fullBillModal'),
         fullBillContent: document.getElementById('fullBillContent')
     };
-    
+
     initVoiceRecognition();
     initEventListeners();
     selectLanguage('hi');
 
-    // Load voice output preference
     const savedVoicePref = localStorage.getItem('voiceOutputEnabled');
     if (savedVoicePref !== null) {
         AppState.voiceOutputEnabled = savedVoicePref === 'true';
@@ -304,19 +303,15 @@ function sanitizeHTML(str) {
 function getQuestion(key) {
     const q = QuestionFlow[key];
     if (!q || !q.question) return null;
-    
     let question = q.question[AppState.language] || q.question.en;
-    
-    // Make questions dynamic based on room name
-    if (key === 'roomDimensions') {
+    if (key === 'roomDimensionsManual') {
         const roomName = getCurrentRoomName();
         if (roomName) {
-            question = AppState.language === 'hi' 
-                ? `${roomName} ki lambai aur chaurai kitni hai? (bolo: 12 by 14)` 
+            question = AppState.language === 'hi'
+                ? `${roomName} ki lambai aur chaurai? (bolo: 12 by 14)`
                 : `${roomName} length and breadth? (say: 12 by 14)`;
         }
     }
-    
     return question;
 }
 
@@ -328,8 +323,8 @@ function getCurrentRoomName() {
 function getCurrentRoom() {
     if (AppState.currentFloorIndex >= 0 && AppState.bill.floors[AppState.currentFloorIndex]) {
         const floor = AppState.bill.floors[AppState.currentFloorIndex];
-        if (floor.rooms[AppState.bill.currentRoomIndex]) {
-            return floor.rooms[AppState.bill.currentRoomIndex];
+        if (floor.rooms[AppState.currentRoomIndex]) {
+            return floor.rooms[AppState.currentRoomIndex];
         }
     }
     return null;
@@ -350,39 +345,21 @@ function calculateRoomArea(room) {
 function calculateRoomCosts(room, rates) {
     const area = calculateRoomArea(room);
     const finalArea = Math.max(0, area - (AppState.bill.minusArea || 0));
-    const costs = { 
-        floorMaterial: 0, 
-        wallMaterial: 0 
-    };
-    
+    const costs = { floorMaterial: 0, wallMaterial: 0 };
     const floorRate = room.floorRate || rates.floor || 0;
     const wallRate = room.wallRate || rates.wall || 0;
-    
     if (room.workType === 'floor' || room.workType === 'both') {
         costs.floorMaterial = finalArea * floorRate;
     }
     if (room.workType === 'wall' || room.workType === 'both') {
         costs.wallMaterial = finalArea * wallRate;
     }
-    
-    return { 
-        ...costs, 
-        area, 
-        finalArea,
-        roomTotal: costs.floorMaterial + costs.wallMaterial,
-        floorRate,
-        wallRate
-    };
+    return { ...costs, area, finalArea, roomTotal: costs.floorMaterial + costs.wallMaterial, floorRate, wallRate };
 }
 
 function calculateTotalCosts() {
     const rates = AppState.bill.rates;
-    const totals = { 
-        floorArea: 0, 
-        floorMaterial: 0,
-        wallMaterial: 0,
-        skirtingCost: 0, holeCost: 0 
-    };
+    const totals = { floorArea: 0, floorMaterial: 0, wallMaterial: 0, skirtingCost: 0, holeCost: 0 };
     AppState.bill.floors.forEach(floor => {
         floor.rooms.forEach(room => {
             const costs = calculateRoomCosts(room, rates);
@@ -435,9 +412,11 @@ function renderQuickButtons(options) {
     options.forEach(opt => {
         const btn = document.createElement('button');
         btn.className = 'quick-btn';
-        btn.textContent = typeof opt.label === 'object' ? (opt.label.hi || opt.label.en) : opt.label;
+        btn.textContent = typeof opt.label === 'object' ? (opt.label[AppState.language] || opt.label.en) : opt.label;
         btn.dataset.value = opt.value;
-        btn.addEventListener('click', () => handleQuickButton(opt.value));
+        btn.addEventListener('click', (function(value) {
+            return function() { handleQuickButton(value); };
+        })(opt.value));
         DOM.quickButtons.appendChild(btn);
     });
 }
@@ -474,12 +453,11 @@ function startNewBill() {
     showQuestion(AppState.currentStep);
 }
 
+// ===== FIXED showQuestion =====
 function showQuestion(stepKey) {
-    console.log('[DEBUG showQuestion] stepKey:', stepKey);
-
-    // Prevent duplicate question showing
-    if (lastShownQuestion === stepKey) {
-        console.log('[DEBUG showQuestion] Question already shown, skipping duplicate');
+    // Always allow if we're moving to a different step than what was last shown
+    if (lastShownQuestion === stepKey && AppState.currentStep === stepKey) {
+        console.log('[showQuestion] Duplicate blocked:', stepKey);
         return;
     }
 
@@ -487,29 +465,28 @@ function showQuestion(stepKey) {
     if (stepKey === 'roomDimensions' || stepKey === 'roomDimensionsManual') {
         const currentRoom = getCurrentRoom();
         if (currentRoom && currentRoom.length > 0 && currentRoom.breadth > 0) {
-            console.log('[DEBUG showQuestion] Dimensions already saved, skipping to tileType');
             stepKey = 'tileType';
         }
     }
 
     const step = QuestionFlow[stepKey];
     if (!step) {
-        console.log('[DEBUG showQuestion] Step not found in QuestionFlow!');
+        console.error('[showQuestion] Step not found:', stepKey);
         return;
     }
-    console.log('[DEBUG showQuestion] Found step, inputType:', step.inputType);
+
+    AppState.currentStep = stepKey;
+    lastShownQuestion = stepKey;
 
     clearPhoneConfirmBtn();
     const question = getQuestion(stepKey);
     if (question) {
         addMessage(question, 'system');
         speakQuestion(question, step);
-        lastShownQuestion = stepKey;
     }
 
     if (step.inputType === 'quick' && step.options) {
         renderQuickButtons(step.options);
-        // Clear input for quick button selection
         DOM.textInput.value = '';
         DOM.textInput.placeholder = AppState.language === 'hi' ? 'Button dabao...' : 'Tap a button...';
         DOM.textInput.blur();
@@ -549,9 +526,7 @@ function speakQuestion(text, step) {
     if (!AppState.voiceOutputEnabled) return;
     if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
-        
         let fullText = text;
-        
         if (step && step.inputType === 'quick' && step.options) {
             const optionsText = step.options.map(opt => {
                 const label = typeof opt.label === 'object' ? opt.label.hi || opt.label.en : opt.label;
@@ -561,7 +536,6 @@ function speakQuestion(text, step) {
         } else if (step && step.inputType === 'dimensions') {
             fullText = text + '. Example: twelve by fourteen';
         }
-        
         const utterance = new SpeechSynthesisUtterance(fullText);
         utterance.lang = AppState.language === 'hi' ? 'hi-IN' : 'en-US';
         utterance.rate = 0.85;
@@ -578,11 +552,20 @@ function toggleVoiceOutput() {
     localStorage.setItem('voiceOutputEnabled', AppState.voiceOutputEnabled);
 }
 
+// ===== FIXED handleQuickButton =====
 function handleQuickButton(value) {
     const step = QuestionFlow[AppState.currentStep];
-    const label = step.options.find(o => o.value === value);
-    const displayValue = label ? (typeof label.label === 'object' ? label.label.hi || label.label.en : label.label) : value;
-    addMessage(displayValue, 'user');
+    if (!step) return;
+
+    const label = step.options?.find(o => o.value === value)?.label;
+    const displayLabel = typeof label === 'object'
+        ? (label[AppState.language] || label.en)
+        : (label || value);
+    addMessage(displayLabel, 'user');
+
+    // CRITICAL: reset lastShownQuestion so next question is never blocked
+    lastShownQuestion = null;
+
     processAnswer(value, step);
 }
 
@@ -609,50 +592,25 @@ function handleTextInput() {
     }
 
     if (step.inputType === 'dimensions') {
-        // Prevent duplicate processing
-        if (isProcessingDimensions) {
-            console.log('[DEBUG handleTextInput] Already processing dimensions, skipping duplicate call');
-            return;
-        }
+        if (isProcessingDimensions) return;
         isProcessingDimensions = true;
-
-        console.log('[DEBUG handleTextInput] Raw input value:', value);
-        console.log('[DEBUG handleTextInput] Current step:', AppState.currentStep);
-
-        // Clear input immediately to prevent re-processing
         DOM.textInput.value = '';
 
-        // Stop any active voice recognition to prevent duplicate processing
         if (AppState.isRecording) {
-            console.log('[DEBUG handleTextInput] Stopping active voice recognition');
             AppState.recognition.stop();
         }
 
         const dimensions = parseDimensions(value);
-        console.log('[DEBUG handleTextInput] parseDimensions returned:', dimensions);
         if (dimensions) {
             addMessage(`Length: ${dimensions.length}', Breadth: ${dimensions.breadth}'`, 'user');
-            // Directly save dimensions and advance to tileType
-            ensureCurrentRoom();
-            if (AppState.currentFloorIndex >= 0 && AppState.bill.currentRoomIndex >= 0) {
-                const currentRoom = AppState.bill.floors[AppState.currentFloorIndex].rooms[AppState.bill.currentRoomIndex];
-                currentRoom.length = dimensions.length;
-                currentRoom.breadth = dimensions.breadth;
-                AppState.bill.updatedAt = new Date().toISOString();
-                saveToLocalStorage();
-            }
-            AppState.currentStep = 'tileType';
-            console.log('[DEBUG handleTextInput] Advanced to tileType');
-            updatePreview();
-            showQuestion('tileType');
-            isProcessingDimensions = false;
+            saveDimensionsAndAdvance(dimensions);
         } else {
             showToast('Format samajh nahi aaya. Bolo: 12 by 14 ya 12 14', 'error');
-            isProcessingDimensions = false;
         }
+        isProcessingDimensions = false;
         return;
     }
-    
+
     if (step.inputType === 'number') {
         const num = parseFloat(value);
         if (isNaN(num) || num <= 0) {
@@ -661,42 +619,47 @@ function handleTextInput() {
         }
         value = num.toString();
     }
-    
+
     addMessage(value, 'user');
     DOM.textInput.value = '';
     processAnswer(value, step);
 }
 
+// ===== EXTRACTED: Save dimensions in one place =====
+function saveDimensionsAndAdvance(dimensions) {
+    ensureCurrentRoom();
+    if (AppState.currentFloorIndex >= 0 && AppState.currentRoomIndex >= 0) {
+        const room = AppState.bill.floors[AppState.currentFloorIndex].rooms[AppState.currentRoomIndex];
+        room.length = dimensions.length;
+        room.breadth = dimensions.breadth;
+        AppState.bill.updatedAt = new Date().toISOString();
+        saveToLocalStorage();
+    }
+    lastShownQuestion = null;
+    AppState.currentStep = 'tileType';
+    updatePreview();
+    showQuestion('tileType');
+}
+
 function parseDimensions(input) {
     const text = input.toLowerCase().trim();
-    console.log('[DEBUG parseDimensions] Input text:', text);
 
-    // Patterns: "12 by 14", "12x14" (ordered by specificity)
     const patterns = [
-        /(\d+)\s*(?:by|x|×|✕|‐|\-)\s*(\d+)/i,  // Most specific: 12 by 14, 12x14
-        /(\d+)\s+(\d+)/  // Least specific: 12 14 (must be last)
+        /(\d+(?:\.\d+)?)\s*(?:by|x|×|✕|‐|\-)\s*(\d+(?:\.\d+)?)/i,
+        /(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)/
     ];
 
-    for (let i = 0; i < patterns.length; i++) {
-        const pattern = patterns[i];
+    for (const pattern of patterns) {
         const match = text.match(pattern);
-        console.log(`[DEBUG parseDimensions] Pattern ${i}:`, pattern, 'Match:', match);
         if (match) {
             const length = parseFloat(match[1]);
             const breadth = parseFloat(match[2]);
-            console.log(`[DEBUG parseDimensions] Parsed length: ${length}, breadth: ${breadth}`);
-
-            // Validate reasonable room dimensions (0-500 feet)
             if (length > 0 && length <= 500 && breadth > 0 && breadth <= 500) {
-                console.log('[DEBUG parseDimensions] Returning valid dimensions:', { length, breadth });
                 return { length, breadth };
-            } else {
-                console.log('[DEBUG parseDimensions] Validation FAILED - out of range');
             }
         }
     }
 
-    // Try Hindi word numbers
     const hindiNums = {
         'एक': 1, 'दो': 2, 'तीन': 3, 'चार': 4, 'पांच': 5,
         'छह': 6, 'सात': 7, 'आठ': 8, 'नौ': 9, 'दस': 10,
@@ -711,23 +674,13 @@ function parseDimensions(input) {
     const words = text.split(/\s+/);
     const nums = [];
     for (const word of words) {
-        if (hindiNums[word]) {
-            nums.push(hindiNums[word]);
-        }
+        if (hindiNums[word]) nums.push(hindiNums[word]);
         const digitMatch = word.match(/\d+/);
-        if (digitMatch) {
-            nums.push(parseInt(digitMatch[0]));
-        }
+        if (digitMatch) nums.push(parseInt(digitMatch[0]));
     }
 
-    if (nums.length >= 2) {
-        const length = nums[0];
-        const breadth = nums[1];
-        
-        // Validate reasonable room dimensions
-        if (length > 0 && length <= 500 && breadth > 0 && breadth <= 500) {
-            return { length, breadth };
-        }
+    if (nums.length >= 2 && nums[0] > 0 && nums[0] <= 500 && nums[1] > 0 && nums[1] <= 500) {
+        return { length: nums[0], breadth: nums[1] };
     }
 
     return null;
@@ -753,7 +706,7 @@ function clearPhoneConfirmBtn() {
 function showImageUploadUI() {
     const existingUpload = document.getElementById('imageUploadContainer');
     if (existingUpload) existingUpload.remove();
-    
+
     const container = document.createElement('div');
     container.id = 'imageUploadContainer';
     container.style.cssText = 'margin-top:12px;padding:16px;background:#f5f5f5;border-radius:12px;';
@@ -771,14 +724,16 @@ function showImageUploadUI() {
             </button>
         </div>
     `;
-    
+
     DOM.inputArea.querySelector('.quick-buttons').appendChild(container);
-    
+
     document.getElementById('skipImageBtn').addEventListener('click', () => {
-        processAnswer({ skipped: true }, QuestionFlow[AppState.currentStep]);
         container.remove();
+        lastShownQuestion = null;
+        AppState.currentStep = 'roomDimensions';
+        showQuestion('roomDimensions');
     });
-    
+
     document.getElementById('roomImageInput').addEventListener('change', (e) => {
         const file = e.target.files[0];
         if (file) {
@@ -786,8 +741,6 @@ function showImageUploadUI() {
             reader.onload = (evt) => {
                 const preview = document.getElementById('imagePreview');
                 preview.innerHTML = `<img src="${evt.target.result}" style="max-width:100%;max-height:150px;border-radius:8px;">`;
-                
-                // Convert to JPEG for consistent PDF support
                 const img = new Image();
                 img.onload = () => {
                     const canvas = document.createElement('canvas');
@@ -796,20 +749,19 @@ function showImageUploadUI() {
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(img, 0, 0);
                     const jpegData = canvas.toDataURL('image/jpeg', 0.8);
-                    
-                    // Save image to room
-                    const MAX_IMAGE_SIZE = 2 * 1024 * 1024; // 2MB in bytes (approx base64 chars)
+                    const MAX_IMAGE_SIZE = 2 * 1024 * 1024;
                     if (jpegData.length > MAX_IMAGE_SIZE) {
                         showToast('Image too large. Max 2MB allowed.', 'error');
                         return;
                     }
                     ensureCurrentRoom();
-                    AppState.bill.floors[AppState.currentFloorIndex].rooms[AppState.bill.currentRoomIndex].imageData = jpegData;
-                    
+                    AppState.bill.floors[AppState.currentFloorIndex].rooms[AppState.currentRoomIndex].imageData = jpegData;
                     showToast('Photo uploaded!', 'success');
                     setTimeout(() => {
-                        processAnswer({ image: jpegData }, QuestionFlow[AppState.currentStep]);
                         container.remove();
+                        lastShownQuestion = null;
+                        AppState.currentStep = 'roomDimensions';
+                        showQuestion('roomDimensions');
                     }, 1000);
                 };
                 img.src = evt.target.result;
@@ -819,51 +771,25 @@ function showImageUploadUI() {
     });
 }
 
+// ===== FIXED processAnswer =====
 function processAnswer(value, step) {
-    console.log('[DEBUG processAnswer] Called with value:', value, 'step:', step, 'currentStep:', AppState.currentStep);
-    console.log('[DEBUG processAnswer] currentFloorIndex:', AppState.currentFloorIndex, 'currentRoomIndex:', AppState.bill.currentRoomIndex);
-    // Handle dimensions (length + breadth combined)
-    if ((AppState.currentStep === 'roomDimensions' || AppState.currentStep === 'roomDimensionsManual') && typeof value === 'object' && value.length && value.breadth) {
-        console.log('[DEBUG processAnswer] Dimensions branch matched! Saving and advancing to tileType');
-        ensureCurrentRoom();
-        console.log('[DEBUG processAnswer] After ensureCurrentRoom, currentFloorIndex:', AppState.currentFloorIndex);
-        if (AppState.currentFloorIndex === -1) {
-            console.error('[DEBUG processAnswer] ERROR: currentFloorIndex is still -1! Cannot save dimensions.');
-            showToast('Error: Floor not set. Please go back and select a floor.', 'error');
-            return;
-        }
-        AppState.bill.floors[AppState.currentFloorIndex].rooms[AppState.bill.currentRoomIndex].length = value.length;
-        AppState.bill.floors[AppState.currentFloorIndex].rooms[AppState.bill.currentRoomIndex].breadth = value.breadth;
-        AppState.currentStep = 'tileType';
-        console.log('[DEBUG processAnswer] After save, currentStep set to:', AppState.currentStep);
-        console.log('[DEBUG processAnswer] Room data:', AppState.bill.floors[AppState.currentFloorIndex].rooms[AppState.bill.currentRoomIndex]);
-    } else {
-        saveValue(value, step);
-        
-        // Special handling for work type - decide which rate questions to ask
-        if (AppState.currentStep === 'workType') {
-            const workType = value;
-            if (workType === 'floor') {
-                AppState.currentStep = 'floorRate';
-            } else if (workType === 'wall') {
-                AppState.currentStep = 'wallRate';
-            } else {
-                AppState.currentStep = 'floorRate';
-            }
-        } else {
-            AppState.currentStep = step.checkNext ? step.checkNext(value) : step.next;
-        }
+    // Handle dimensions object (from voice/camera path)
+    if ((AppState.currentStep === 'roomDimensions' || AppState.currentStep === 'roomDimensionsManual')
+        && typeof value === 'object' && value.length && value.breadth) {
+        addMessage(`Length: ${value.length}', Breadth: ${value.breadth}'`, 'user');
+        saveDimensionsAndAdvance(value);
+        return;
     }
 
+    // Save value and determine next step
+    saveValue(value, step);
+    const nextStep = step.checkNext ? step.checkNext(value) : step.next;
+    AppState.currentStep = nextStep;
+
+    // Handle special routing
     if (AppState.currentStep === 'roomDetails') {
-        AppState.bill.currentRoomIndex = 0;
+        AppState.currentRoomIndex = 0;
         AppState.currentStep = 'roomName';
-    } else if (AppState.currentStep === 'nextFloor') {
-        if (value === 'yes') {
-            AppState.currentStep = 'floorSelection';
-        } else {
-            AppState.currentStep = 'skirtingNeededFinal';
-        }
     } else if (AppState.currentStep === 'showBillSummary') {
         showFinalSummary();
         return;
@@ -872,11 +798,11 @@ function processAnswer(value, step) {
         return;
     }
 
-    console.log('[DEBUG processAnswer] About to call showQuestion with currentStep:', AppState.currentStep);
     updatePreview();
     showQuestion(AppState.currentStep);
 }
 
+// ===== FIXED saveValue =====
 function saveValue(value, step) {
     if (!step.saveTo) return;
     const path = step.saveTo;
@@ -885,16 +811,34 @@ function saveValue(value, step) {
     else if (step.inputType === 'number') finalValue = parseFloat(value) || 0;
 
     if (path === 'currentFloor') {
-        if (AppState.currentFloorIndex === -1) {
-            AppState.bill.floors.push({ name: value, rooms: [] });
-            AppState.currentFloorIndex = AppState.bill.floors.length - 1;
+        // FIXED: Always create a new floor when coming from floorSelection
+        // Only update name if customFloorName is updating an existing floor
+        if (AppState.currentStep === 'floorSelection' || AppState.currentStep === 'customFloorName') {
+            if (AppState.currentStep === 'floorSelection') {
+                // Always push new floor for floorSelection
+                AppState.bill.floors.push({ name: value === 'Custom' ? '' : value, rooms: [] });
+                AppState.currentFloorIndex = AppState.bill.floors.length - 1;
+                AppState.currentRoomIndex = 0;
+            } else {
+                // customFloorName: update the name of the floor just created
+                if (AppState.currentFloorIndex >= 0) {
+                    AppState.bill.floors[AppState.currentFloorIndex].name = value;
+                }
+            }
         } else {
-            AppState.bill.floors[AppState.currentFloorIndex].name = value;
+            // Fallback
+            if (AppState.currentFloorIndex === -1) {
+                AppState.bill.floors.push({ name: value, rooms: [] });
+                AppState.currentFloorIndex = AppState.bill.floors.length - 1;
+                AppState.currentRoomIndex = 0;
+            } else {
+                AppState.bill.floors[AppState.currentFloorIndex].name = value;
+            }
         }
     } else if (path.startsWith('currentRoom.')) {
         const key = path.split('.')[1];
         ensureCurrentRoom();
-        AppState.bill.floors[AppState.currentFloorIndex].rooms[AppState.bill.currentRoomIndex][key] = finalValue;
+        AppState.bill.floors[AppState.currentFloorIndex].rooms[AppState.currentRoomIndex][key] = finalValue;
     } else if (path.startsWith('customer.')) {
         AppState.bill.customer[path.split('.')[1]] = finalValue;
     } else if (path.startsWith('rates.')) {
@@ -912,15 +856,18 @@ function saveValue(value, step) {
 function ensureCurrentRoom() {
     if (AppState.currentFloorIndex === -1) return;
     const floor = AppState.bill.floors[AppState.currentFloorIndex];
-    if (!floor.rooms[AppState.bill.currentRoomIndex]) {
-        floor.rooms[AppState.bill.currentRoomIndex] = { name: '', length: 0, breadth: 0, area: 0, tileType: '', workType: '', floorRate: 0, wallRate: 0, imageData: null };
+    if (!floor.rooms[AppState.currentRoomIndex]) {
+        floor.rooms[AppState.currentRoomIndex] = {
+            name: '', length: 0, breadth: 0, area: 0,
+            tileType: '', workType: '', floorRate: 0, wallRate: 0, imageData: null
+        };
     }
 }
 
 function showFinalSummary() {
     const totals = calculateTotalCosts();
     const rates = AppState.bill.rates;
-    
+
     let roomDetails = '';
     AppState.bill.floors.forEach((floor, fi) => {
         floor.rooms.forEach((room, ri) => {
@@ -928,29 +875,24 @@ function showFinalSummary() {
             const costs = calculateRoomCosts(room, rates);
             const workLabel = room.workType === 'floor' ? 'Floor' : room.workType === 'wall' ? 'Wall' : 'Floor+Wall';
             const roomImageHtml = room.imageData ? `<img src="${room.imageData}" style="max-width:120px;max-height:80px;border-radius:8px;margin-bottom:8px;cursor:pointer;" onclick="this.style.maxWidth='300px';this.style.maxHeight='300px';">` : '';
-            
+
             roomDetails += `
                 <div style="margin-bottom:15px;padding:10px;background:#f5f5f5;border-radius:8px;">
                     ${roomImageHtml}
                     <div style="font-weight:600;margin-bottom:5px;">${sanitizeHTML(room.name)} (${sanitizeHTML(floor.name)})</div>
                     <div style="font-size:0.85rem;color:#666;">
-                        <div>Size: ${room.length}' x ${room.breadth}' = ${area} sq ft</div>
+                        <div>Size: ${room.length || 0}' x ${room.breadth || 0}' = ${area} sq ft</div>
                         <div>Tile: ${sanitizeHTML(room.tileType)} | Work: ${workLabel}</div>
                     </div>
                     <table style="width:100%;margin-top:8px;font-size:0.85rem;">
-                        ${costs.floorMaterial > 0 ? `
-                        <tr><td>Floor Tile</td><td>${area} sq ft</td><td>x ${costs.floorRate}</td><td style="text-align:right;">${formatCurrency(costs.floorMaterial)}</td></tr>
-                        ` : ''}
-                        ${costs.wallMaterial > 0 ? `
-                        <tr><td>Wall Tile</td><td>${area} sq ft</td><td>x ${costs.wallRate}</td><td style="text-align:right;">${formatCurrency(costs.wallMaterial)}</td></tr>
-                        ` : ''}
+                        ${costs.floorMaterial > 0 ? `<tr><td>Floor Tile</td><td>${area} sq ft</td><td>x ${costs.floorRate}</td><td style="text-align:right;">${formatCurrency(costs.floorMaterial)}</td></tr>` : ''}
+                        ${costs.wallMaterial > 0 ? `<tr><td>Wall Tile</td><td>${area} sq ft</td><td>x ${costs.wallRate}</td><td style="text-align:right;">${formatCurrency(costs.wallMaterial)}</td></tr>` : ''}
                         <tr style="font-weight:600;background:#e3f2fd;"><td colspan="3">Room Total:</td><td style="text-align:right;">${formatCurrency(costs.roomTotal)}</td></tr>
                     </table>
-                </div>
-            `;
+                </div>`;
         });
     });
-    
+
     addMessage(`<strong>Bill Summary</strong><br><br>
         <div style="text-align:left;font-size:0.9rem;">
             <div style="margin-bottom:10px;"><strong>Customer:</strong> ${sanitizeHTML(AppState.bill.customer.name)}</div>
@@ -964,12 +906,12 @@ function showFinalSummary() {
                 <span>${formatCurrency(totals.grandTotal)}</span>
             </div>
         </div>`, 'system');
-    
+
     DOM.grandTotal.textContent = formatCurrency(totals.grandTotal);
     clearQuickButtons();
     DOM.inputArea.style.display = 'none';
     DOM.progressContainer.style.display = 'none';
-    
+
     addMessage(`<div style="margin-top:20px;text-align:center;">
         <button class="btn btn-primary" onclick="showFullBill()" style="margin:5px;">View Full Bill</button>
         <button class="btn btn-secondary" onclick="if(confirm('Start new bill?'))location.reload()" style="margin:5px;">New Bill</button>
@@ -993,11 +935,6 @@ function updatePreview() {
     }
 
     AppState.bill.floors.forEach((floor, fi) => {
-        const floorCosts = floor.rooms.reduce((acc, room) => {
-            const costs = calculateRoomCosts(room, AppState.bill.rates);
-            return { floor: acc.floor + costs.floorMaterial, wall: acc.wall + costs.wallMaterial };
-        }, { floor: 0, wall: 0 });
-
         html += `<div class="floor-card ${fi === 0 ? 'expanded' : ''}" data-floor="${fi}">
             <div class="floor-header" onclick="this.parentElement.classList.toggle('expanded')">
                 <div class="floor-title"><span class="floor-title-icon">${fi + 1}</span>${sanitizeHTML(floor.name)}</div>
@@ -1009,26 +946,20 @@ function updatePreview() {
             <div class="floor-body">${floor.rooms.map((room, ri) => {
                 const area = calculateRoomArea(room);
                 const costs = calculateRoomCosts(room, AppState.bill.rates);
-                const rates = AppState.bill.rates;
-                const roomImageHtml = room.imageData ? `<img src="${room.imageData}" style="width:100%;max-height:100px;object-fit:cover;border-radius:6px;margin-bottom:8px;cursor:pointer;" onclick="this.style.maxWidth='300px';this.style.maxHeight='300px';">` : '';
-                const editBtn = `<button class="edit-room-btn" onclick="editRoom(${ri}, ${fi})" style="position:absolute;top:8px;right:8px;background:rgba(30,136,229,0.9);color:white;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:0.7rem;opacity:0;transition:opacity 0.2s;">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
-                    Edit
-                </button>`;
+                const roomImageHtml = room.imageData ? `<img src="${room.imageData}" style="width:100%;max-height:100px;object-fit:cover;border-radius:6px;margin-bottom:8px;">` : '';
+                const editBtn = `<button onclick="editRoom(${ri}, ${fi})" style="position:absolute;top:8px;right:8px;background:rgba(30,136,229,0.9);color:white;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:0.7rem;">Edit</button>`;
                 return `<div class="room-item" style="position:relative;">
-                    ${roomImageHtml}
-                    ${editBtn}
+                    ${roomImageHtml}${editBtn}
                     <div class="room-item-header">
                         <span class="room-item-name">${sanitizeHTML(room.name) || 'Room ' + (ri + 1)}</span>
                         <span class="room-item-area" style="background:#1e88e5;color:white;padding:2px 8px;border-radius:4px;">${formatCurrency(costs.roomTotal)}</span>
                     </div>
                     <div style="font-size:0.8rem;color:#666;margin:5px 0;">
-                        <span>${room.length}' x ${room.breadth}' = ${area} sq ft</span>
+                        <span>${room.length || 0}' x ${room.breadth || 0}' = ${area} sq ft</span>
                     </div>
                     <div class="room-item-details">
                         <span class="room-item-tag">${sanitizeHTML(room.tileType) || 'No tile'}</span>
                         <span class="room-item-tag">${room.workType === 'floor' ? 'Floor' : room.workType === 'wall' ? 'Wall' : room.workType === 'both' ? 'Floor+Wall' : 'No work'}</span>
-                        ${room.notes ? `<span class="room-item-tag" style="background:#fff3e0;">Note</span>` : ''}
                     </div>
                     <div class="cost-summary">
                         ${costs.floorMaterial > 0 ? `<div class="cost-row"><span>Floor (${area} x ${costs.floorRate})</span><span>${formatCurrency(costs.floorMaterial)}</span></div>` : ''}
@@ -1045,39 +976,28 @@ function updatePreview() {
 // ===== Edit Bill Functions =====
 function editRoom(roomIndex, floorIndex) {
     const room = AppState.bill.floors[floorIndex].rooms[roomIndex];
-    
     DOM.fullBillModal.classList.add('active');
     DOM.fullBillContent.innerHTML = `
         <div style="padding:20px;">
             <h3 style="margin-bottom:20px;color:#1e88e5;">Edit Room</h3>
-            
-            <div style="margin-bottom:15px;">
-                <label style="display:block;margin-bottom:5px;font-weight:500;">Room Image</label>
-                ${room.imageData ? `<img src="${room.imageData}" style="max-width:150px;max-height:120px;border-radius:8px;margin-bottom:10px;">` : ''}
-                <input type="file" id="editRoomImage" accept="image/*" capture="environment" style="display:block;">
-            </div>
-            
             <div style="margin-bottom:15px;">
                 <label style="display:block;margin-bottom:5px;font-weight:500;">Room Name</label>
                 <input type="text" id="editRoomName" value="${sanitizeHTML(room.name)}" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:1rem;">
             </div>
-            
             <div style="display:flex;gap:15px;margin-bottom:15px;">
                 <div style="flex:1;">
                     <label style="display:block;margin-bottom:5px;font-weight:500;">Length (feet)</label>
-                    <input type="number" id="editRoomLength" value="${room.length}" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:1rem;">
+                    <input type="number" id="editRoomLength" value="${room.length || 0}" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:1rem;">
                 </div>
                 <div style="flex:1;">
                     <label style="display:block;margin-bottom:5px;font-weight:500;">Breadth (feet)</label>
-                    <input type="number" id="editRoomBreadth" value="${room.breadth}" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:1rem;">
+                    <input type="number" id="editRoomBreadth" value="${room.breadth || 0}" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:1rem;">
                 </div>
             </div>
-            
             <div style="margin-bottom:15px;">
                 <label style="display:block;margin-bottom:5px;font-weight:500;">Tile Size</label>
-                <input type="text" id="editRoomTile" value="${room.tileType}" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:1rem;">
+                <input type="text" id="editRoomTile" value="${room.tileType || ''}" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:1rem;">
             </div>
-            
             <div style="margin-bottom:15px;">
                 <label style="display:block;margin-bottom:5px;font-weight:500;">Work Type</label>
                 <select id="editRoomWorkType" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:1rem;">
@@ -1086,79 +1006,32 @@ function editRoom(roomIndex, floorIndex) {
                     <option value="both" ${room.workType === 'both' ? 'selected' : ''}>Both</option>
                 </select>
             </div>
-            
             <div style="margin-bottom:15px;">
                 <label style="display:block;margin-bottom:5px;font-weight:500;">Floor Rate</label>
-                <input type="number" id="editRoomFloorRate" value="${room.floorRate}" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:1rem;">
+                <input type="number" id="editRoomFloorRate" value="${room.floorRate || 0}" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:1rem;">
             </div>
-            
             <div style="margin-bottom:15px;">
                 <label style="display:block;margin-bottom:5px;font-weight:500;">Wall Rate</label>
-                <input type="number" id="editRoomWallRate" value="${room.wallRate}" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:1rem;">
+                <input type="number" id="editRoomWallRate" value="${room.wallRate || 0}" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:1rem;">
             </div>
-            
             <div style="margin-bottom:20px;">
                 <label style="display:block;margin-bottom:5px;font-weight:500;">Notes</label>
                 <textarea id="editRoomNotes" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:1rem;min-height:80px;">${sanitizeHTML(room.notes || '')}</textarea>
             </div>
-            
             <div style="display:flex;gap:10px;justify-content:flex-end;">
-                <button class="btn btn-danger" onclick="deleteRoom(${roomIndex}, ${floorIndex})" style="background:#e53935;color:white;border:none;padding:12px 20px;border-radius:8px;cursor:pointer;">Delete Room</button>
-                <button class="btn btn-secondary" onclick="closeEditModal()" style="padding:12px 20px;border:1px solid #ddd;border-radius:8px;cursor:pointer;">Cancel</button>
-                <button class="btn btn-primary" onclick="saveRoomEdit(${roomIndex}, ${floorIndex})" style="background:#1e88e5;color:white;border:none;padding:12px 20px;border-radius:8px;cursor:pointer;">Save</button>
+                <button onclick="deleteRoom(${roomIndex}, ${floorIndex})" style="background:#e53935;color:white;border:none;padding:12px 20px;border-radius:8px;cursor:pointer;">Delete</button>
+                <button onclick="closeEditModal()" style="padding:12px 20px;border:1px solid #ddd;border-radius:8px;cursor:pointer;">Cancel</button>
+                <button onclick="saveRoomEdit(${roomIndex}, ${floorIndex})" style="background:#1e88e5;color:white;border:none;padding:12px 20px;border-radius:8px;cursor:pointer;">Save</button>
             </div>
-        </div>
-    `;
-    
-    // Handle image change
-    document.getElementById('editRoomImage').addEventListener('change', (e) => {
-        const file = e.target.files[0];
-        if (file) {
-            const reader = new FileReader();
-            reader.onload = (evt) => {
-                const preview = e.target.previousElementSibling;
-                if (preview.tagName === 'IMG') {
-                    preview.src = evt.target.result;
-                } else {
-                    const img = document.createElement('img');
-                    img.src = evt.target.result;
-                    img.style = 'max-width:150px;max-height:120px;border-radius:8px;margin-bottom:10px;';
-                    e.target.parentNode.insertBefore(img, e.target);
-                }
-            };
-            reader.readAsDataURL(file);
-        }
-    });
+        </div>`;
 }
 
 function saveRoomEdit(roomIndex, floorIndex) {
-    const room = AppState.bill.floors[floorIndex].rooms[roomIndex];
-    const newImage = document.getElementById('editRoomImage').files[0];
-    
-    if (newImage) {
-        const reader = new FileReader();
-        reader.onload = (evt) => {
-            const img = new Image();
-            img.onload = () => {
-                const canvas = document.createElement('canvas');
-                canvas.width = img.width;
-                canvas.height = img.height;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(img, 0, 0);
-                room.imageData = canvas.toDataURL('image/jpeg', 0.8);
-                applyRoomEdits(roomIndex, floorIndex);
-            };
-            img.src = evt.target.result;
-        };
-        reader.readAsDataURL(newImage);
-    } else {
-        applyRoomEdits(roomIndex, floorIndex);
-    }
+    applyRoomEdits(roomIndex, floorIndex);
 }
 
 function applyRoomEdits(roomIndex, floorIndex) {
     const room = AppState.bill.floors[floorIndex].rooms[roomIndex];
-    
     room.name = document.getElementById('editRoomName').value;
     room.length = parseFloat(document.getElementById('editRoomLength').value) || 0;
     room.breadth = parseFloat(document.getElementById('editRoomBreadth').value) || 0;
@@ -1167,13 +1040,11 @@ function applyRoomEdits(roomIndex, floorIndex) {
     room.floorRate = parseFloat(document.getElementById('editRoomFloorRate').value) || 0;
     room.wallRate = parseFloat(document.getElementById('editRoomWallRate').value) || 0;
     room.notes = document.getElementById('editRoomNotes').value;
-    
     AppState.bill.updatedAt = new Date().toISOString();
     saveToLocalStorage();
     updatePreview();
     closeEditModal();
     showFinalSummary();
-    
     showToast('Room updated!', 'success');
 }
 
@@ -1196,13 +1067,8 @@ function closeEditModal() {
 function addCustomNote() {
     const note = prompt('Enter your note:');
     if (note) {
-        if (!AppState.bill.customNotes) {
-            AppState.bill.customNotes = [];
-        }
-        AppState.bill.customNotes.push({
-            text: note,
-            timestamp: new Date().toISOString()
-        });
+        if (!AppState.bill.customNotes) AppState.bill.customNotes = [];
+        AppState.bill.customNotes.push({ text: note, timestamp: new Date().toISOString() });
         saveToLocalStorage();
         showFinalSummary();
         showToast('Note added!', 'success');
@@ -1239,11 +1105,8 @@ function deleteBill(id) {
             delete bills[id];
             localStorage.setItem('thikaidar_bills', JSON.stringify(bills));
             showToast('Bill deleted successfully', 'success');
-        } else {
-            showToast('Bill not found', 'error');
         }
     } catch (e) {
-        console.error('Delete error:', e);
         showToast('Failed to delete bill: ' + e.message, 'error');
     }
 }
@@ -1264,8 +1127,7 @@ function showSavedBills() {
                     <button class="btn btn-sm btn-secondary load-bill-btn">Load</button>
                     <button class="btn btn-sm btn-danger delete-bill-btn">Delete</button>
                 </div>
-            </div>
-        `).join('');
+            </div>`).join('');
 
         DOM.savedBillsList.querySelectorAll('.load-bill-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -1274,14 +1136,12 @@ function showSavedBills() {
                 DOM.savedBillsModal.classList.remove('active');
             });
         });
-
         DOM.savedBillsList.querySelectorAll('.delete-bill-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const id = e.target.closest('.saved-bill-item').dataset.id;
                 if (confirm('Delete this bill?')) {
                     deleteBill(id);
                     showSavedBills();
-                    showToast('Bill deleted', 'success');
                 }
             });
         });
@@ -1291,12 +1151,11 @@ function showSavedBills() {
 
 function loadBill(id) {
     const bill = loadFromLocalStorage(id);
-    if (!bill) {
-        showToast('Bill not found', 'error');
-        return;
-    }
+    if (!bill) { showToast('Bill not found', 'error'); return; }
     AppState.bill = bill;
     AppState.currentStep = 'complete';
+    AppState.currentFloorIndex = bill.floors.length - 1;
+    AppState.currentRoomIndex = 0;
     DOM.welcomeScreen.style.display = 'none';
     DOM.chatMessages.style.display = 'flex';
     DOM.inputArea.style.display = 'none';
@@ -1314,25 +1173,19 @@ function showFullBill() {
     const bill = AppState.bill;
     const totals = calculateTotalCosts();
     const rates = bill.rates;
-    
+
     let roomRows = '';
     bill.floors.forEach((floor, fi) => {
         floor.rooms.forEach((room, ri) => {
             const area = calculateRoomArea(room);
             const costs = calculateRoomCosts(room, rates);
-            const workLabel = room.workType === 'floor' ? 'Floor' : room.workType === 'wall' ? 'Wall' : 'Floor+Wall';
             const roomImageHtml = room.imageData ? `<img src="${room.imageData}" style="max-width:200px;max-height:150px;border-radius:8px;margin-bottom:12px;cursor:pointer;" onclick="this.style.maxWidth='500px';this.style.maxHeight='500px';">` : '';
-            
+
             roomRows += `
                 <div style="margin-bottom:20px;padding:15px;background:#f9f9f9;border-radius:8px;position:relative;">
-                    <button onclick="editRoom(${ri}, ${fi})" style="position:absolute;top:10px;right:10px;background:#1e88e5;color:white;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:0.8rem;">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
-                        Edit
-                    </button>
+                    <button onclick="editRoom(${ri}, ${fi})" style="position:absolute;top:10px;right:10px;background:#1e88e5;color:white;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:0.8rem;">Edit</button>
                     ${roomImageHtml}
-                    <div style="font-weight:bold;font-size:1.1rem;margin-bottom:10px;color:#1e88e5;">
-                        ${sanitizeHTML(floor.name)} - ${sanitizeHTML(room.name)}
-                    </div>
+                    <div style="font-weight:bold;font-size:1.1rem;margin-bottom:10px;color:#1e88e5;">${sanitizeHTML(floor.name)} - ${sanitizeHTML(room.name)}</div>
                     ${room.notes ? `<div style="background:#fff3e0;padding:8px 12px;border-radius:6px;margin-bottom:10px;font-size:0.85rem;"><strong>Note:</strong> ${sanitizeHTML(room.notes)}</div>` : ''}
                     <table style="width:100%;border-collapse:collapse;">
                         <tr style="background:#eee;">
@@ -1343,8 +1196,7 @@ function showFullBill() {
                             <th style="padding:8px;border:1px solid #ddd;text-align:right;">Rate</th>
                             <th style="padding:8px;border:1px solid #ddd;text-align:right;">Amount</th>
                         </tr>
-                        ${costs.floorMaterial > 0 ? `
-                        <tr>
+                        ${costs.floorMaterial > 0 ? `<tr>
                             <td style="padding:8px;border:1px solid #ddd;">Floor Tile (${sanitizeHTML(room.tileType)})</td>
                             <td style="padding:8px;border:1px solid #ddd;text-align:right;">${room.length}'</td>
                             <td style="padding:8px;border:1px solid #ddd;text-align:right;">${room.breadth}'</td>
@@ -1352,8 +1204,7 @@ function showFullBill() {
                             <td style="padding:8px;border:1px solid #ddd;text-align:right;">${costs.floorRate}</td>
                             <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:bold;">${formatCurrency(costs.floorMaterial)}</td>
                         </tr>` : ''}
-                        ${costs.wallMaterial > 0 ? `
-                        <tr>
+                        ${costs.wallMaterial > 0 ? `<tr>
                             <td style="padding:8px;border:1px solid #ddd;">Wall Tile (${sanitizeHTML(room.tileType)})</td>
                             <td style="padding:8px;border:1px solid #ddd;text-align:right;">${room.length}'</td>
                             <td style="padding:8px;border:1px solid #ddd;text-align:right;">${room.breadth}'</td>
@@ -1366,22 +1217,10 @@ function showFullBill() {
                             <td style="padding:8px;border:1px solid #ddd;text-align:right;color:#1e88e5;">${formatCurrency(costs.roomTotal)}</td>
                         </tr>
                     </table>
-                </div>
-            `;
+                </div>`;
         });
     });
-    
-    const customNotesHtml = bill.customNotes && bill.customNotes.length > 0 ? `
-        <h3 style="margin-top:20px;">Notes</h3>
-        <div style="margin-bottom:20px;">
-            ${bill.customNotes.map(note => `
-                <div style="background:#fff3e0;padding:10px;border-radius:8px;margin-bottom:8px;">
-                    ${sanitizeHTML(note.text)}
-                </div>
-            `).join('')}
-        </div>
-    ` : '';
-    
+
     DOM.fullBillContent.innerHTML = `
         <div class="bill-document">
             <div class="bill-header">
@@ -1398,45 +1237,30 @@ function showFullBill() {
                 <p><strong>Address:</strong> ${sanitizeHTML(bill.customer.address)}</p>
                 <p><strong>House No:</strong> ${sanitizeHTML(bill.customer.houseNumber)}</p>
             </div>
-            
             <div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;">
                 <h3 style="margin:0;">Room Details</h3>
-                <button onclick="addCustomNote()" style="background:#43a047;color:white;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:0.85rem;">
-                    + Add Note
-                </button>
+                <button onclick="addCustomNote()" style="background:#43a047;color:white;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:0.85rem;">+ Add Note</button>
             </div>
             ${roomRows}
-            ${customNotesHtml}
-            
-            ${totals.skirtingCost > 0 ? `
-            <div style="margin-top:15px;padding:15px;background:#e8f5e9;border-radius:8px;">
-                <strong>Skirting:</strong> ${bill.extras.skirting.length} ft x ${rates.skirting} = ${formatCurrency(totals.skirtingCost)}
-            </div>` : ''}
-
-            ${totals.holeCost > 0 ? `
-            <div style="margin-top:10px;padding:15px;background:#e8f5e9;border-radius:8px;">
-                <strong>Hole Fittings:</strong> ${bill.extras.holes.count} x ${rates.hole} = ${formatCurrency(totals.holeCost)}
-            </div>` : ''}
-            
+            ${totals.skirtingCost > 0 ? `<div style="margin-top:15px;padding:15px;background:#e8f5e9;border-radius:8px;"><strong>Skirting:</strong> ${bill.extras.skirting.length} ft x ${rates.skirting} = ${formatCurrency(totals.skirtingCost)}</div>` : ''}
+            ${totals.holeCost > 0 ? `<div style="margin-top:10px;padding:15px;background:#e8f5e9;border-radius:8px;"><strong>Hole Fittings:</strong> ${bill.extras.holes.count} x ${rates.hole} = ${formatCurrency(totals.holeCost)}</div>` : ''}
             <div class="bill-totals" style="margin-top:20px;">
                 <div class="bill-total-row grand"><span>Grand Total</span><span>${formatCurrency(totals.grandTotal)}</span></div>
             </div>
-        </div>
-    `;
+        </div>`;
     DOM.fullBillModal.classList.add('active');
 }
 
 function printBill() {
     const printContent = DOM.fullBillContent.innerHTML;
     const printWindow = window.open('', '_blank');
-    printWindow.document.write(`<html><head><title>Print Bill</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;padding:20px}table{width:100%;border-collapse:collapse;margin:20px 0}th,td{border:1px solid #ddd;padding:10px;text-align:left}.text-right{text-align:right}</style></head><body>${printContent}</body></html>`);
+    printWindow.document.write(`<html><head><title>Print Bill</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;padding:20px}table{width:100%;border-collapse:collapse;margin:20px 0}th,td{border:1px solid #ddd;padding:10px;text-align:left}</style></head><body>${printContent}</body></html>`);
     printWindow.document.close();
     printWindow.print();
 }
 
 async function exportPdf() {
     showToast('Generating PDF...', 'info');
-
     try {
         const { jsPDF } = window.jspdf;
         const doc = new jsPDF('p', 'mm', 'a4');
@@ -1445,12 +1269,10 @@ async function exportPdf() {
         const margin = 15;
         const contentWidth = pageWidth - 2 * margin;
         let yPos = margin;
-
         const bill = AppState.bill;
         const totals = calculateTotalCosts();
         const rates = bill.rates;
 
-        // ===== HEADER =====
         doc.setFillColor(30, 136, 229);
         doc.rect(0, 0, pageWidth, 35, 'F');
         doc.setTextColor(255, 255, 255);
@@ -1460,13 +1282,10 @@ async function exportPdf() {
         doc.setFontSize(10);
         doc.setFont('helvetica', 'normal');
         doc.text('Professional Tile Work Billing', margin, 26);
-        doc.setFontSize(10);
         doc.text(`Bill No: ${bill.id.substring(0, 8).toUpperCase()}`, pageWidth - margin - 60, 15);
         doc.text(`Date: ${new Date(bill.createdAt).toLocaleDateString()}`, pageWidth - margin - 60, 22);
-
         yPos = 45;
 
-        // ===== CUSTOMER DETAILS =====
         doc.setTextColor(30, 136, 229);
         doc.setFontSize(12);
         doc.setFont('helvetica', 'bold');
@@ -1481,7 +1300,6 @@ async function exportPdf() {
         doc.text(`House No: ${bill.customer.houseNumber}`, margin, yPos);
         yPos += 12;
 
-        // ===== ROOM DETAILS =====
         doc.setTextColor(30, 136, 229);
         doc.setFontSize(12);
         doc.setFont('helvetica', 'bold');
@@ -1492,72 +1310,38 @@ async function exportPdf() {
             floor.rooms.forEach((room) => {
                 const area = calculateRoomArea(room);
                 const costs = calculateRoomCosts(room, rates);
-
-                // Calculate minimum height needed for this room section
-                let roomBlockHeight = 30; // header + details
+                let roomBlockHeight = 40;
                 if (costs.floorMaterial > 0) roomBlockHeight += 8;
                 if (costs.wallMaterial > 0) roomBlockHeight += 8;
-                roomBlockHeight += 8; // room total row
-                if (room.notes) roomBlockHeight += 10;
-                roomBlockHeight += 5; // bottom spacing
-
-                // Check if we need a new page
-                if (yPos + roomBlockHeight > pageHeight - margin) {
-                    doc.addPage();
-                    yPos = margin;
-                }
+                roomBlockHeight += 8;
+                if (yPos + roomBlockHeight > pageHeight - margin) { doc.addPage(); yPos = margin; }
 
                 const roomStartY = yPos;
                 const hasImage = !!room.imageData;
-                const imgWidth = 40;
-                const imgHeight = 32;
-
-                // Draw room image if present
+                const imgWidth = 40, imgHeight = 32;
                 if (hasImage) {
                     try {
                         const imgFormat = room.imageData.indexOf('data:image/png') !== -1 ? 'PNG' : 'JPEG';
                         doc.addImage(room.imageData, imgFormat, margin, yPos, imgWidth, imgHeight);
-                    } catch (imgError) {
-                        console.log('Could not add image:', imgError);
-                    }
+                    } catch (e) { console.log('Image error:', e); }
                 }
-
-                // Room header - positioned to the right of image, or at margin if no image
                 const textStartX = hasImage ? margin + imgWidth + 5 : margin;
                 const headerWidth = contentWidth - (hasImage ? imgWidth + 5 : 0);
-
                 doc.setFillColor(227, 242, 253);
                 doc.rect(textStartX, yPos, headerWidth, 8, 'F');
                 doc.setTextColor(30, 136, 229);
                 doc.setFontSize(11);
                 doc.setFont('helvetica', 'bold');
-                doc.text(`${floor.name} - ${room.name}`, textStartX + 2, yPos + 5.5, { align: 'left' });
+                doc.text(`${floor.name} - ${room.name}`, textStartX + 2, yPos + 5.5);
                 yPos += 12;
-
-                // Room details (left-aligned)
                 doc.setTextColor(50, 50, 50);
                 doc.setFontSize(9);
                 doc.setFont('helvetica', 'normal');
-                doc.text(`Size: ${room.length}' x ${room.breadth}' = ${area} sq ft`, textStartX, yPos);
-                yPos += 6;
-                doc.text(`Tile: ${room.tileType}  |  Work: ${room.workType === 'both' ? 'Floor + Wall' : room.workType}`, textStartX, yPos);
-                yPos += 8;
+                doc.text(`Size: ${room.length}' x ${room.breadth}' = ${area} sq ft`, textStartX, yPos); yPos += 6;
+                doc.text(`Tile: ${room.tileType}  |  Work: ${room.workType === 'both' ? 'Floor + Wall' : room.workType}`, textStartX, yPos); yPos += 8;
+                if (hasImage && yPos < roomStartY + imgHeight + 4) yPos = roomStartY + imgHeight + 4;
 
-                // Ensure image and room content end at same Y level
-                if (hasImage) {
-                    const imgBottom = roomStartY + imgHeight;
-                    if (yPos < imgBottom + 4) {
-                        yPos = imgBottom + 4;
-                    }
-                }
-
-                // Table column positions (always full width)
-                const colDesc = margin + 2;
-                const colArea = margin + 55;
-                const colRate = margin + 95;
-                const colAmount = pageWidth - margin - 10;
-
-                // Table header
+                const colDesc = margin + 2, colArea = margin + 55, colRate = margin + 95, colAmount = pageWidth - margin - 10;
                 doc.setFillColor(230, 230, 230);
                 doc.rect(margin, yPos, contentWidth, 7, 'F');
                 doc.setFontSize(8);
@@ -1568,8 +1352,6 @@ async function exportPdf() {
                 doc.text('Amount', colAmount, yPos + 5, { align: 'right' });
                 doc.setFont('helvetica', 'normal');
                 yPos += 9;
-
-                // Floor tile row
                 if (costs.floorMaterial > 0) {
                     doc.text('Floor Tile', colDesc, yPos);
                     doc.text(`${area} sq ft`, colArea, yPos);
@@ -1577,8 +1359,6 @@ async function exportPdf() {
                     doc.text(formatCurrency(costs.floorMaterial), colAmount, yPos, { align: 'right' });
                     yPos += 7;
                 }
-
-                // Wall tile row
                 if (costs.wallMaterial > 0) {
                     doc.text('Wall Tile', colDesc, yPos);
                     doc.text(`${area} sq ft`, colArea, yPos);
@@ -1586,8 +1366,6 @@ async function exportPdf() {
                     doc.text(formatCurrency(costs.wallMaterial), colAmount, yPos, { align: 'right' });
                     yPos += 7;
                 }
-
-                // Room total row
                 doc.setFillColor(227, 242, 253);
                 doc.rect(margin, yPos, contentWidth, 7, 'F');
                 doc.setFontSize(9);
@@ -1595,95 +1373,33 @@ async function exportPdf() {
                 doc.text('Room Total:', colDesc, yPos + 5);
                 doc.text(formatCurrency(costs.roomTotal), colAmount, yPos + 5, { align: 'right' });
                 doc.setFont('helvetica', 'normal');
-                yPos += 10;
-
-                // Room notes
-                if (room.notes) {
-                    doc.setFillColor(255, 243, 224);
-                    doc.rect(margin, yPos, contentWidth, 8, 'F');
-                    doc.setFontSize(8);
-                    doc.setTextColor(100, 60, 0);
-                    doc.text('Note: ' + room.notes, margin + 2, yPos + 5);
-                    doc.setTextColor(50, 50, 50);
-                    yPos += 11;
-                }
+                yPos += 12;
             });
         });
 
-        // ===== EXTRAS (Skirting, Holes) =====
-        let hasExtras = totals.skirtingCost > 0 || totals.holeCost > 0;
-        if (hasExtras) {
-            if (yPos > pageHeight - margin - 30) {
-                doc.addPage();
-                yPos = margin;
-            }
+        if (totals.skirtingCost > 0 || totals.holeCost > 0) {
+            if (yPos > pageHeight - margin - 30) { doc.addPage(); yPos = margin; }
             doc.setFontSize(9);
             doc.setFont('helvetica', 'normal');
             doc.setTextColor(50, 50, 50);
-            if (totals.skirtingCost > 0) {
-                doc.text(`Skirting: ${bill.extras.skirting.length} ft x ${rates.skirting} = ${formatCurrency(totals.skirtingCost)}`, margin, yPos);
-                yPos += 6;
-            }
-            if (totals.holeCost > 0) {
-                doc.text(`Hole Fittings: ${bill.extras.holes.count} x ${rates.hole} = ${formatCurrency(totals.holeCost)}`, margin, yPos);
-                yPos += 6;
-            }
+            if (totals.skirtingCost > 0) { doc.text(`Skirting: ${bill.extras.skirting.length} ft x ${rates.skirting} = ${formatCurrency(totals.skirtingCost)}`, margin, yPos); yPos += 6; }
+            if (totals.holeCost > 0) { doc.text(`Hole Fittings: ${bill.extras.holes.count} x ${rates.hole} = ${formatCurrency(totals.holeCost)}`, margin, yPos); yPos += 6; }
             yPos += 3;
         }
 
-        // ===== CUSTOM NOTES =====
-        if (bill.customNotes && bill.customNotes.length > 0) {
-            if (yPos > pageHeight - margin - bill.customNotes.length * 12) {
-                doc.addPage();
-                yPos = margin;
-            }
-            doc.setTextColor(30, 136, 229);
-            doc.setFontSize(11);
-            doc.setFont('helvetica', 'bold');
-            doc.text('Notes', margin, yPos);
-            yPos += 7;
-            doc.setTextColor(100, 60, 0);
-            doc.setFontSize(8);
-            doc.setFont('helvetica', 'normal');
-            bill.customNotes.forEach(note => {
-                if (yPos > pageHeight - margin - 15) {
-                    doc.addPage();
-                    yPos = margin;
-                }
-                doc.setFillColor(255, 243, 224);
-                doc.rect(margin, yPos, contentWidth, 8, 'F');
-                doc.text(note.text, margin + 2, yPos + 5);
-                doc.setTextColor(50, 50, 50);
-                yPos += 11;
-            });
-        }
-
-        // ===== GRAND TOTAL =====
-        yPos += 3;
-
-        // Check if we need a new page for total
-        if (yPos > pageHeight - margin - 25) {
-            doc.addPage();
-            yPos = margin;
-        }
-
-        // Separator line
+        if (yPos > pageHeight - margin - 25) { doc.addPage(); yPos = margin; }
         doc.setDrawColor(30, 136, 229);
         doc.setLineWidth(0.5);
         doc.line(margin, yPos, pageWidth - margin, yPos);
         yPos += 8;
-
-        // Total box background
         doc.setFillColor(227, 242, 253);
         doc.roundedRect(margin, yPos - 5, contentWidth, 14, 2, 2, 'F');
-
         doc.setFontSize(14);
         doc.setFont('helvetica', 'bold');
         doc.setTextColor(30, 136, 229);
         doc.text('Grand Total:', margin + 5, yPos + 5);
         doc.text(formatCurrency(totals.grandTotal), pageWidth - margin - 5, yPos + 5, { align: 'right' });
 
-        // ===== FOOTER =====
         const totalPages = doc.internal.getNumberOfPages();
         for (let i = 1; i <= totalPages; i++) {
             doc.setPage(i);
@@ -1693,10 +1409,8 @@ async function exportPdf() {
             doc.text(`Generated by Thikaidar Bill Generator  |  Page ${i} of ${totalPages}`, pageWidth / 2, pageHeight - 8, { align: 'center' });
         }
 
-        // Save the PDF
         const fileName = `Thikaidar_Bill_${bill.customer.name.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`;
         doc.save(fileName);
-
         showToast('PDF downloaded!', 'success');
     } catch (error) {
         console.error('PDF Error:', error);
@@ -1708,15 +1422,8 @@ async function exportPdf() {
 function shareToWhatsApp(forceTextOnly = false) {
     const bill = AppState.bill;
     const totals = calculateTotalCosts();
-    
-    // Create shareable text message
-    let message = `*Thikaidar Bill*\n`;
-    message += `─────────────────\n`;
-    message += `*Customer:* ${bill.customer.name}\n`;
-    message += `*Phone:* ${bill.customer.phone}\n`;
-    message += `*Address:* ${bill.customer.address}\n`;
-    message += `─────────────────\n`;
-    
+    let message = `*Thikaidar Bill*\n─────────────────\n`;
+    message += `*Customer:* ${bill.customer.name}\n*Phone:* ${bill.customer.phone}\n*Address:* ${bill.customer.address}\n─────────────────\n`;
     bill.floors.forEach(floor => {
         floor.rooms.forEach(room => {
             const area = (parseFloat(room.length) || 0) * (parseFloat(room.breadth) || 0);
@@ -1724,53 +1431,25 @@ function shareToWhatsApp(forceTextOnly = false) {
             message += `${room.name} (${floor.name}): ${room.length}'x${room.breadth}' = ${area} sq ft [${workLabel}]\n`;
         });
     });
-    
-    if (totals.skirtingCost > 0) {
-        message += `Skirting: ${bill.extras.skirting.length}ft x Rs${bill.rates.skirting} = Rs${totals.skirtingCost}\n`;
-    }
-    if (totals.holeCost > 0) {
-        message += `Hole Fittings: ${bill.extras.holes.count} x Rs${bill.rates.hole} = Rs${totals.holeCost}\n`;
-    }
-    
-    message += `─────────────────\n`;
-    message += `*GRAND TOTAL: Rs${totals.grandTotal}*\n`;
-    message += `─────────────────\n`;
-    message += `Generated by Thikaidar Bill`;
-    
-    // Use Web Share API if available and not forcing text only
+    if (totals.skirtingCost > 0) message += `Skirting: ${bill.extras.skirting.length}ft x Rs${bill.rates.skirting} = Rs${totals.skirtingCost}\n`;
+    if (totals.holeCost > 0) message += `Hole Fittings: ${bill.extras.holes.count} x Rs${bill.rates.hole} = Rs${totals.holeCost}\n`;
+    message += `─────────────────\n*GRAND TOTAL: Rs${totals.grandTotal}*\n─────────────────\nGenerated by Thikaidar Bill`;
+
     if (!forceTextOnly && navigator.share) {
-        const blob = new Blob([message], { type: 'text/plain' });
-        const file = new File([blob], 'bill.txt', { type: 'text/plain' });
-        
-        navigator.share({
-            title: 'Thikaidar Bill',
-            text: message,
-            files: [file]
-        }).then(() => {
-            showToast('Shared successfully!', 'success');
-        }).catch((e) => {
-            if (e.name !== 'AbortError') {
-                openWhatsAppLink(message, bill.customer.phone);
-            }
-        });
+        navigator.share({ title: 'Thikaidar Bill', text: message })
+            .then(() => showToast('Shared successfully!', 'success'))
+            .catch((e) => { if (e.name !== 'AbortError') openWhatsAppLink(message, bill.customer.phone); });
         return;
     }
-    
-    // Fallback: Open WhatsApp with pre-filled text
     openWhatsAppLink(message, bill.customer.phone);
 }
 
 function openWhatsAppLink(message, phone) {
     const encodedMessage = encodeURIComponent(message);
-    let waUrl;
-    
-    if (phone && phone.length >= 10) {
-        const cleanPhone = phone.replace(/\D/g, '');
-        waUrl = `https://wa.me/${cleanPhone}?text=${encodedMessage}`;
-    } else {
-        waUrl = `https://web.whatsapp.com/send?text=${encodedMessage}`;
-    }
-    
+    const cleanPhone = phone ? phone.replace(/\D/g, '') : '';
+    const waUrl = cleanPhone.length >= 10
+        ? `https://wa.me/${cleanPhone}?text=${encodedMessage}`
+        : `https://web.whatsapp.com/send?text=${encodedMessage}`;
     window.open(waUrl, '_blank');
 }
 
@@ -1784,10 +1463,10 @@ function initEventListeners() {
     document.getElementById('savedBillsBtn').addEventListener('click', showSavedBills);
     document.getElementById('collapseBtn').addEventListener('click', () => DOM.billPreview.classList.toggle('collapsed'));
     DOM.sendBtn.addEventListener('click', handleTextInput);
-    DOM.textInput.addEventListener('keypress', (e) => { 
+    DOM.textInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
             const step = QuestionFlow[AppState.currentStep];
-            if (step.inputType === 'phone') {
+            if (step && step.inputType === 'phone') {
                 e.preventDefault();
                 showToast('Press confirm button or keep typing', 'info');
             } else {
@@ -1802,28 +1481,21 @@ function initEventListeners() {
     document.getElementById('whatsappShareBtn').addEventListener('click', shareToWhatsApp);
     document.getElementById('printBillBtn').addEventListener('click', printBill);
     document.getElementById('exportFullPdfBtn').addEventListener('click', exportPdf);
-    
     [DOM.savedBillsModal, DOM.fullBillModal].forEach(modal => {
         modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.remove('active'); });
     });
-    
     document.getElementById('languageBtn').addEventListener('click', () => {
         selectLanguage(AppState.language === 'en' ? 'hi' : 'en');
     });
-    
     if (DOM.voiceOutputBtn) {
         DOM.voiceOutputBtn.addEventListener('click', toggleVoiceOutput);
         DOM.voiceOutputBtn.classList.add('active');
     }
-    
-    // Load saved API key
     const savedKey = localStorage.getItem('groq_api_key');
     if (savedKey) {
         const keyInput = document.getElementById('groqApiKey');
         if (keyInput) keyInput.value = savedKey;
     }
-    
-    // Save API key on input
     const apiKeyInput = document.getElementById('groqApiKey');
     if (apiKeyInput) {
         apiKeyInput.addEventListener('change', (e) => {
@@ -1833,7 +1505,7 @@ function initEventListeners() {
     }
 }
 
-function     selectLanguage(lang) {
+function selectLanguage(lang) {
     AppState.language = lang;
     document.querySelectorAll('.lang-btn').forEach(btn => btn.classList.toggle('selected', btn.dataset.lang === lang));
     document.getElementById('languageBtn').querySelector('span').textContent = lang === 'en' ? 'EN' : 'HI';
@@ -1856,8 +1528,7 @@ function updateInputPlaceholder() {
     }
 }
 
-// ===== AI Integration (Free Groq) =====
-// SECURITY: API key must be provided by user - never hardcode keys in source code
+// ===== AI Integration =====
 let GROQ_API_KEY = localStorage.getItem('groq_api_key') || '';
 
 function saveApiKey(key) {
@@ -1873,95 +1544,48 @@ function saveApiKey(key) {
 }
 
 async function getAIResponse(transcript, currentStep, options) {
-    console.log('Calling AI for:', transcript);
-    
-    if (!GROQ_API_KEY) {
-        showToast('API key missing', 'error');
-        return null;
-    }
-    
+    if (!GROQ_API_KEY) return null;
     const stepQuestion = getQuestion(currentStep) || '';
-    
-    // Create a map for matching
     const valueToOption = {};
     options.forEach(o => {
         valueToOption[o.value] = o;
         if (o.label.hi) valueToOption[o.label.hi.toLowerCase()] = o;
         if (o.label.en) valueToOption[o.label.en.toLowerCase()] = o;
     });
-    
-    const prompt = `User said: "${transcript}"
-Question: "${stepQuestion}"
-
-Available option values: ${options.map(o => o.value).join(', ')}
-
-Return ONLY the exact option value that matches. Examples:
-- If user said "third floor" or "तीसरा फ्लोर", return "Third Floor"
-- If user said "first floor" or "पहली मंजिल", return "First Floor"
-- If user said "bedroom" or "बेडरूम", return "Bedroom"
-
-Return ONLY one option value, no explanation.`;
-
+    const prompt = `User said: "${transcript}"\nQuestion: "${stepQuestion}"\nAvailable option values: ${options.map(o => o.value).join(', ')}\nReturn ONLY the exact option value that matches. No explanation.`;
     try {
         showToast('AI samajh raha hai...', 'info');
-        
         const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${GROQ_API_KEY}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                model: 'llama-3.2-3b-preview',
-                messages: [{ role: 'user', content: prompt }],
-                max_tokens: 50,
-                temperature: 0.1
-            })
+            headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: 'llama-3.2-3b-preview', messages: [{ role: 'user', content: prompt }], max_tokens: 50, temperature: 0.1 })
         });
-        
         const data = await response.json();
-        console.log('AI Response:', JSON.stringify(data));
-        
         const answer = data.choices?.[0]?.message?.content?.trim().replace(/"/g, '') || '';
-        console.log('AI Answer:', answer);
-        
-        // Try exact match first
-        if (valueToOption[answer]) {
-            return valueToOption[answer];
-        }
-        
-        // Try partial match
+        if (valueToOption[answer]) return valueToOption[answer];
         for (const [key, option] of Object.entries(valueToOption)) {
-            if (answer.toLowerCase().includes(key.toLowerCase()) || key.toLowerCase().includes(answer.toLowerCase())) {
-                return option;
-            }
+            if (answer.toLowerCase().includes(key.toLowerCase()) || key.toLowerCase().includes(answer.toLowerCase())) return option;
         }
-        
         return null;
     } catch (e) {
         console.error('AI Error:', e);
-        showToast('AI error: ' + e.message, 'error');
+        return null;
     }
-    return null;
 }
 
 // ===== Voice Recognition =====
 function initVoiceRecognition() {
     const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
-    
     if (!SpeechRecognitionAPI) {
-        console.log('Speech Recognition not supported');
-        DOM.voiceBtn.style.display = 'none';
+        if (DOM.voiceBtn) DOM.voiceBtn.style.display = 'none';
         return;
     }
-    
     AppState.recognition = new SpeechRecognitionAPI();
     AppState.recognition.continuous = false;
     AppState.recognition.interimResults = true;
     AppState.recognition.lang = 'hi-IN';
-    
+
     AppState.recognition.onstart = () => {
-        console.log('Voice recognition started');
         AppState.isRecording = true;
         AppState.voiceTranscriptBuffer = '';
         DOM.voiceBtn.classList.add('recording');
@@ -1969,55 +1593,39 @@ function initVoiceRecognition() {
         DOM.voiceBtn.querySelector('.stop-icon').style.display = 'block';
         showToast('Sun raha hai... boliye', 'info');
     };
-    
     AppState.recognition.onend = () => {
-        console.log('Voice recognition ended');
         AppState.isRecording = false;
         DOM.voiceBtn.classList.remove('recording');
         DOM.voiceBtn.querySelector('.mic-icon').style.display = 'block';
         DOM.voiceBtn.querySelector('.stop-icon').style.display = 'none';
     };
-    
     AppState.recognition.onresult = (event) => {
         const result = event.results[0];
         const transcript = result[0].transcript;
-        console.log('Heard:', transcript, '| Interim:', !result.isFinal, '| Conf:', result[0].confidence);
-        
         const step = QuestionFlow[AppState.currentStep];
-        
         if (result.isFinal) {
             AppState.voiceTranscriptBuffer = transcript;
-            
             if (step.inputType === 'phone') {
                 const digits = transcript.replace(/\D/g, '');
                 const currentValue = DOM.textInput.value.replace(/\D/g, '');
-                if (digits.length > currentValue.length) {
-                    DOM.textInput.value = digits;
-                    showToast('Digits updated: ' + digits, 'success');
-                } else {
-                    DOM.textInput.value = digits || currentValue;
-                }
+                DOM.textInput.value = digits.length > currentValue.length ? digits : (digits || currentValue);
             } else {
                 handleVoiceInput(transcript);
             }
         } else {
             AppState.voiceTranscriptBuffer = transcript;
             if (step.inputType === 'phone') {
-                const digits = transcript.replace(/\D/g, '');
-                DOM.textInput.value = digits;
+                DOM.textInput.value = transcript.replace(/\D/g, '');
             } else {
                 DOM.textInput.value = transcript;
             }
         }
     };
-    
     AppState.recognition.onerror = (event) => {
-        console.error('Speech recognition error:', event.error);
         AppState.isRecording = false;
         DOM.voiceBtn.classList.remove('recording');
         DOM.voiceBtn.querySelector('.mic-icon').style.display = 'block';
         DOM.voiceBtn.querySelector('.stop-icon').style.display = 'none';
-        
         const errorMessages = {
             'no-speech': 'Kuch nahi suna. Phir se try karo.',
             'audio-capture': 'Microphone nahi mila.',
@@ -2025,10 +1633,8 @@ function initVoiceRecognition() {
             'network': 'Network error.',
             'aborted': 'Rok diya.'
         };
-        
         showToast(errorMessages[event.error] || 'Voice error: ' + event.error, 'error');
     };
-    
     DOM.voiceBtn.addEventListener('click', toggleVoiceRecording);
 }
 
@@ -2043,155 +1649,65 @@ function toggleVoiceRecording() {
 
 async function handleVoiceInput(transcript) {
     if (!transcript) return;
-    
-    console.log('Voice input:', transcript);
-    
     const step = QuestionFlow[AppState.currentStep];
-    
+
     if (step.inputType === 'phone') {
         const digits = transcript.replace(/\D/g, '');
-        
-        // Also check for Hindi digit words
-        if (digits.length === 0) {
-            const digitWords = {
-                'zero': '0', 'ek': '1', 'one': '1', 'do': '2', 'two': '2',
-                'teen': '3', 'three': '3', 'char': '4', 'chaar': '4', 'four': '4',
-                'paanch': '5', 'five': '5', 'chah': '6', 'chaha': '6', 'six': '6',
-                'saat': '7', 'saath': '7', 'seven': '7', 'aath': '8', 'eight': '8',
-                'nau': '9', 'nine': '9', 'das': '10', 'ten': '10'
-            };
-            const words = transcript.toLowerCase().split(/\s+/);
-            let foundDigits = '';
-            for (const word of words) {
-                if (digitWords[word]) foundDigits += digitWords[word];
-            }
-            if (foundDigits.length > 0) {
-                const currentValue = DOM.textInput.value.replace(/\D/g, '');
-                DOM.textInput.value = currentValue + foundDigits;
-                return;
-            }
-        }
-        
         if (digits.length > 0) {
-            const currentValue = DOM.textInput.value.replace(/\D/g, '');
-            const newValue = currentValue + digits;
+            const newValue = DOM.textInput.value.replace(/\D/g, '') + digits;
             DOM.textInput.value = newValue;
-            
-            if (newValue.length >= 10) {
-                showToast('Phone number ready! Press OK', 'success');
-            }
-        } else {
-            addMessage(`Suna: "${transcript}" - Digits nahi samjha. Type karo ya bolo.`, 'system');
+            if (newValue.length >= 10) showToast('Phone number ready! Press OK', 'success');
         }
         return;
     }
-    
+
     if (step.inputType === 'dimensions') {
-        // Prevent duplicate processing
-        if (isProcessingDimensions) {
-            console.log('[DEBUG handleVoiceInput dimensions] Already processing, skipping');
-            return;
-        }
+        if (isProcessingDimensions) return;
         isProcessingDimensions = true;
-
-        console.log('[DEBUG handleVoiceInput dimensions] Transcript:', transcript);
-
-        // Clear input immediately to prevent re-processing
         DOM.textInput.value = '';
-
         const dimensions = parseDimensions(transcript);
-        console.log('[DEBUG handleVoiceInput dimensions] parseDimensions returned:', dimensions);
         if (dimensions) {
             addMessage(`Length: ${dimensions.length}', Breadth: ${dimensions.breadth}'`, 'user');
-            console.log('[DEBUG handleVoiceInput dimensions] Calling processAnswer with:', dimensions);
-            processAnswer(dimensions, step);
-            isProcessingDimensions = false;
+            saveDimensionsAndAdvance(dimensions);
         } else {
             addMessage(`Suna: "${transcript}" - Samajh nahi aaya. Bolo: 12 by 14`, 'system');
-            isProcessingDimensions = false;
         }
+        isProcessingDimensions = false;
         return;
     }
-    
+
     if (step.inputType === 'quick') {
-        console.log('Quick input, trying to match...');
         let matchedOption = findMatchingOption(transcript, step.options);
-        
-        // Try AI if pattern matching failed
-        if (!matchedOption) {
-            console.log('Pattern match failed, trying AI...');
-            if (GROQ_API_KEY) {
-                matchedOption = await getAIResponse(transcript, AppState.currentStep, step.options);
-            } else {
-                console.log('No API key configured');
-            }
+        if (!matchedOption && GROQ_API_KEY) {
+            matchedOption = await getAIResponse(transcript, AppState.currentStep, step.options);
         }
-        
         if (matchedOption) {
-            console.log('Matched:', matchedOption.value);
             handleQuickButton(matchedOption.value);
         } else {
-            addMessage(`Suna: "${transcript}" - Samajh nahi aaya. Options select karo ya type karo.`, 'system');
+            addMessage(`Suna: "${transcript}" - Samajh nahi aaya. Button dabao.`, 'system');
         }
     } else if (step.inputType === 'number') {
-        // Try English digits first
         const numMatch = transcript.match(/\d+/);
         if (numMatch) {
             DOM.textInput.value = numMatch[0];
             handleTextInput();
             return;
         }
-        
-        // Devanagari Hindi numbers
-        const hindiNumbersDevanagari = {
-            'एक': 1, 'दो': 2, 'तीन': 3, 'चार': 4, 'पांच': 5,
-            'छह': 6, 'सात': 7, 'आठ': 8, 'नौ': 9, 'दस': 10,
-            'ग्यारह': 11, 'बारह': 12, 'तेरह': 13, 'चौदह': 14, 'पंद्रह': 15,
-            'सोलह': 16, 'सत्रह': 17, 'अठारह': 18, 'उन्नीस': 19,
-            'बीस': 20, 'तीस': 30, 'चालीस': 40, 'पचास': 50,
-            'साठ': 60, 'सत्तर': 70, 'अस्सी': 80, 'नब्बे': 90, 'सौ': 100
+        const hindiNumbers = {
+            'एक': 1, 'दो': 2, 'तीन': 3, 'चार': 4, 'पांच': 5, 'छह': 6, 'सात': 7, 'आठ': 8, 'नौ': 9, 'दस': 10,
+            'बीस': 20, 'तीस': 30, 'चालीस': 40, 'पचास': 50, 'साठ': 60, 'सत्तर': 70, 'अस्सी': 80, 'नब्बे': 90, 'सौ': 100,
+            'ek': 1, 'do': 2, 'teen': 3, 'char': 4, 'paanch': 5, 'chah': 6, 'saat': 7, 'aath': 8, 'nau': 9, 'das': 10,
+            'bees': 20, 'tees': 30, 'chaalis': 40, 'pachaas': 50, 'sau': 100, 'hazaar': 1000
         };
-        
-        // Latin Hindi numbers
-        const hindiNumbersLatin = {
-            'ek': 1, 'one': 1,
-            'do': 2, 'two': 2,
-            'teen': 3, 'three': 3,
-            'char': 4, 'chaar': 4, 'four': 4,
-            'paanch': 5, 'five': 5,
-            'chah': 6, 'chaha': 6, 'six': 6,
-            'saat': 7, 'saath': 7, 'seven': 7,
-            'aath': 8, 'eight': 8,
-            'nau': 9, 'nine': 9,
-            'das': 10, 'ten': 10,
-            'gyarah': 11, 'barah': 12, 'tera': 13, 'chaudah': 14, 'pandrah': 15,
-            'solah': 16, 'satrah': 17, 'atharah': 18, 'unis': 19,
-            'bees': 20, 'tees': 30, 'chaalis': 40, 'pachaas': 50,
-            'sau': 100, 'hazaar': 1000
-        };
-        
-        // Check Devanagari first
-        for (const [word, num] of Object.entries(hindiNumbersDevanagari)) {
+        for (const [word, num] of Object.entries(hindiNumbers)) {
             if (transcript.includes(word)) {
                 DOM.textInput.value = String(num);
                 handleTextInput();
                 return;
             }
         }
-        
-        // Check Latin Hindi
-        const words = transcript.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/);
-        for (const word of words) {
-            if (hindiNumbersLatin[word] !== undefined) {
-                DOM.textInput.value = String(hindiNumbersLatin[word]);
-                handleTextInput();
-                return;
-            }
-        }
-        
-        addMessage(`Suna: "${transcript}" - Number nahi samjha. Type karo ya "ek, do, teen" bolo.`, 'system');
+        addMessage(`Suna: "${transcript}" - Number nahi samjha. Type karo.`, 'system');
     } else {
-        // Text input - accept the transcript as-is
         DOM.textInput.value = transcript;
         handleTextInput();
     }
@@ -2199,15 +1715,13 @@ async function handleVoiceInput(transcript) {
 
 function findMatchingOption(transcript, options) {
     const transcriptLower = transcript.toLowerCase().trim();
-    
-    // Calculate similarity between two strings
+
     function similarity(s1, s2) {
         const longer = s1.length > s2.length ? s1 : s2;
         const shorter = s1.length > s2.length ? s2 : s1;
         if (longer.length === 0) return 1.0;
         return (longer.length - editDistance(longer, shorter)) / longer.length;
     }
-    
     function editDistance(s1, s2) {
         const costs = [];
         for (let i = 0; i <= s1.length; i++) {
@@ -2226,143 +1740,70 @@ function findMatchingOption(transcript, options) {
         }
         return costs[s2.length];
     }
-    
-    // Check for NO first (more specific patterns)
-    const hindiNo = ['nahi', 'nahiin', 'nahin', 'no', 'nah', 'na', 'nhi', 'nahiin', 'नहीं', 'नही', 'ना'];
-    const hindiYes = ['haan', 'han', 'hann', 'yes', 'ji', 'yeah', 'haan', 'हां', 'हाँ', 'जी'];
-    
-    // Check NO first - more specific matching
-    const noPatterns = /\b(nahi|nahin|nahiin|no|nah|nhi)\b/i;
-    if (noPatterns.test(transcriptLower) || transcriptLower.includes('नहीं') || transcriptLower.includes('नही') || transcriptLower.includes('ना नहीं') || transcriptLower.includes('ना नाहीं')) {
-        return options.find(o => o.value === 'no') || options[1];
+
+    const noPatterns = /\b(nahi|nahin|no|nah|nhi)\b/i;
+    if (noPatterns.test(transcriptLower) || transcript.includes('नहीं') || transcript.includes('नही')) {
+        return options.find(o => o.value === 'no') || null;
     }
-    
-    // Check YES second
-    const yesPatterns = /\b(haan|han|hann|yes|ji|yeah)\b/i;
-    if (yesPatterns.test(transcriptLower) || transcriptLower.includes('हाँ') || transcriptLower.includes('हां') || transcriptLower.includes('जी हाँ') || transcriptLower.includes('जी')) {
-        return options.find(o => o.value === 'yes') || options[0];
+    const yesPatterns = /\b(haan|han|yes|ji|yeah)\b/i;
+    if (yesPatterns.test(transcriptLower) || transcript.includes('हाँ') || transcript.includes('हां')) {
+        return options.find(o => o.value === 'yes') || null;
     }
-    
-    // Smart mapping based on context - including Devanagari
+
     const currentStep = AppState.currentStep;
     let mappings = {};
-    
     if (currentStep === 'floorSelection') {
         mappings = {
-            // Devanagari floor names
-            'ग्राउंड': 'Ground Floor', 'ग्राउंड फ्लोर': 'Ground Floor', 'ग्राउंड फ्लोर': 'Ground Floor',
-            'फर्स्ट': 'First Floor', 'फर्स्ट फ्लोर': 'First Floor', 'पहली': 'First Floor', 'पहली मंजिल': 'First Floor',
-            'सेकंड': 'Second Floor', 'सेकंड फ्लोर': 'Second Floor', 'दूसरी': 'Second Floor', 'दूसरी मंजिल': 'Second Floor',
-            'थर्ड': 'Third Floor', 'थर्ड फ्लोर': 'Third Floor', 'तीसरी': 'Third Floor', 'तीसरी मंजिल': 'Third Floor',
-            'दूसरा': 'Custom', 'और': 'Custom', 'अन्य': 'Custom',
-            // Latin
-            'ground': 'Ground Floor', 'graund': 'Ground Floor', 'graunt': 'Ground Floor',
-            'first': 'First Floor', 'fist': 'First Floor', 'pahla': 'First Floor',
-            'second': 'Second Floor', 'secend': 'Second Floor', 'secound': 'Second Floor',
-            'third': 'Third Floor', 'tird': 'Third Floor', 'thrd': 'Third Floor',
-            'doosra': 'Custom', 'dusra': 'Custom', 'dossa': 'Custom', 'other': 'Custom', 'custom': 'Custom'
+            'ground': 'Ground Floor', 'graund': 'Ground Floor',
+            'first': 'First Floor', 'pahla': 'First Floor', 'पहली': 'First Floor',
+            'second': 'Second Floor', 'दूसरी': 'Second Floor',
+            'third': 'Third Floor', 'तीसरी': 'Third Floor',
+            'doosra': 'Custom', 'other': 'Custom', 'custom': 'Custom'
         };
     } else if (currentStep === 'roomName') {
         mappings = {
-            // Devanagari room names
-            'मास्टर': 'Master Bedroom', 'मास्टर बेडरूम': 'Master Bedroom',
-            'बेडरूम': 'Bedroom', 'बेड': 'Bedroom',
-            'गेस्ट': 'Guest Room', 'गेस्ट रूम': 'Guest Room',
-            'ड्राइंग': 'Drawing Room', 'ड्राइंग रूम': 'Drawing Room',
-            'हॉल': 'Hall',
-            'किचन': 'Kitchen',
-            'बाथरूम': 'Bathroom',
-            'टॉयलेट': 'Toilet',
-            'बालकन': 'Balcony', 'बाल्कनी': 'Balcony',
-            'स्टोर': 'Store Room', 'स्टोर रूम': 'Store Room',
-            'कमरा': 'Room', 'रूम': 'Room',
-            // Latin
-            'master': 'Master Bedroom', 'mastar': 'Master Bedroom', 'mast': 'Master Bedroom',
-            'bedroom': 'Bedroom', 'bed': 'Bedroom', 'bedrrom': 'Bedroom',
-            'guest': 'Guest Room', 'gest': 'Guest Room',
-            'drawing': 'Drawing Room', 'draw': 'Drawing Room',
-            'hall': 'Hall', 'hol': 'Hall',
-            'kitchen': 'Kitchen', 'kichen': 'Kitchen',
-            'bathroom': 'Bathroom', 'bath': 'Bathroom',
-            'toilet': 'Toilet', 'toilat': 'Toilet',
-            'balcony': 'Balcony', 'balcon': 'Balcony',
-            'store': 'Store Room', 'stor': 'Store Room',
-            'room': 'Room', 'rum': 'Room', 'other': 'Room'
+            'master': 'Master Bedroom', 'मास्टर': 'Master Bedroom',
+            'bedroom': 'Bedroom', 'बेडरूम': 'Bedroom', 'bed': 'Bedroom',
+            'guest': 'Guest Room', 'drawing': 'Drawing Room',
+            'hall': 'Hall', 'हॉल': 'Hall',
+            'kitchen': 'Kitchen', 'किचन': 'Kitchen',
+            'bathroom': 'Bathroom', 'बाथरूम': 'Bathroom',
+            'toilet': 'Toilet', 'टॉयलेट': 'Toilet',
+            'balcony': 'Balcony', 'store': 'Store Room',
+            'room': 'Room', 'other': 'Room'
         };
     } else if (currentStep === 'tileType') {
-        mappings = {
-            'टू बाई टू': '2x2', '2x2': '2x2',
-            'टू बाई वन': '2x1', '2x1': '2x1',
-            'वन बाई वन': '1x1', '1x1': '1x1',
-            'दूसरा': 'Custom', 'custom': 'Custom'
-        };
+        mappings = { '2x2': '2x2', '2x1': '2x1', '1x1': '1x1', 'custom': 'Custom', 'doosra': 'Custom' };
     } else if (currentStep === 'workType') {
         mappings = {
-            // Devanagari
-            'फ्लोर': 'floor', 'फ्लोर पे': 'floor', 'नीचे': 'floor', 'निचे': 'floor',
-            'वॉल': 'wall', 'वॉल पे': 'wall', 'ऊपर': 'wall', 'ओपर': 'wall',
-            'दोनों': 'both', 'दोनो': 'both',
-            // Latin
-            'floor': 'floor', 'flor': 'floor', 'florr': 'floor',
-            'niche': 'floor', 'niche floor': 'floor', 'nichay': 'floor',
-            'wall': 'wall', 'wal': 'wall', 'woll': 'wall',
-            'opar': 'wall', 'upar': 'wall', 'opar wall': 'wall',
-            'both': 'both', 'dono': 'both', 'donon': 'both', 'dono jagah': 'both'
+            'floor': 'floor', 'niche': 'floor', 'नीचे': 'floor',
+            'wall': 'wall', 'opar': 'wall', 'upar': 'wall', 'ऊपर': 'wall',
+            'both': 'both', 'dono': 'both', 'दोनों': 'both'
         };
     }
-    
-    // Check Devanagari transcript against Devanagari labels
+
     for (const option of options) {
         const labelHi = option.label.hi || '';
-        if (labelHi && transcript.includes(labelHi)) {
-            return option;
-        }
+        if (labelHi && transcript.includes(labelHi)) return option;
     }
-    
-    // Check mapping first
     for (const [key, value] of Object.entries(mappings)) {
         if (transcriptLower.includes(key) || transcript.includes(key)) {
             const option = options.find(o => o.value === value);
             if (option) return option;
         }
     }
-    
-    // Check exact label match
     for (const option of options) {
-        const labelHi = option.label.hi || '';
         const labelEn = option.label.en || '';
-        
-        if (transcript.includes(labelHi) || transcriptLower.includes(labelHi.toLowerCase())) {
-            return option;
-        }
-        if (transcriptLower === labelEn.toLowerCase() || transcriptLower.includes(labelEn.toLowerCase())) {
-            return option;
-        }
-    }
-    
-    // Fuzzy match
-    let bestMatch = null;
-    let bestScore = 0;
-    
-    for (const option of options) {
-        const labelHi = option.label.hi || '';
-        const labelEn = option.label.en || '';
-        
-        const score = similarity(transcriptLower, labelHi.toLowerCase());
-        const enScore = similarity(transcriptLower, labelEn.toLowerCase());
-        const maxScore = Math.max(score, enScore);
-        
-        if (maxScore > bestScore && maxScore > 0.4) {
-            bestScore = maxScore;
-            bestMatch = option;
-        }
-    }
-    
-    if (bestMatch && bestScore > 0.4) {
-        return bestMatch;
+        if (transcriptLower.includes(labelEn.toLowerCase())) return option;
     }
 
-    return null;
+    let bestMatch = null, bestScore = 0;
+    for (const option of options) {
+        const labelHi = option.label.hi || '', labelEn = option.label.en || '';
+        const score = Math.max(similarity(transcriptLower, labelHi.toLowerCase()), similarity(transcriptLower, labelEn.toLowerCase()));
+        if (score > bestScore && score > 0.5) { bestScore = score; bestMatch = option; }
+    }
+    return bestMatch;
 }
 
 // ===== Room Measurement =====
@@ -2374,7 +1815,6 @@ function openMeasurementOverlay() {
     document.getElementById('measureChoices').style.display = 'flex';
     document.getElementById('cameraView').style.display = 'none';
     document.getElementById('photoReview').style.display = 'none';
-    speakQuestion("Room kaise naapna hai?", { lang: 'hi-IN' });
 }
 
 function closeMeasurementOverlay() {
@@ -2388,15 +1828,12 @@ function closeMeasurementOverlay() {
 async function startCameraMeasure() {
     document.getElementById('measureChoices').style.display = 'none';
     document.getElementById('cameraView').style.display = 'flex';
-    document.getElementById('cameraInstruction').textContent = "Room ki photo lo";
-
     try {
         roomPhotoStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
         document.getElementById('measureVideo').srcObject = roomPhotoStream;
-        speakQuestion("Room ki photo lo", { lang: 'hi-IN' });
     } catch (e) {
         showToast("Camera nahi chalu hua. Manual likho.", "error");
-        closeMeasurementOverlay();
+        enterManualMeasure();
     }
 }
 
@@ -2406,21 +1843,13 @@ document.getElementById('captureBtn').addEventListener('click', () => {
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     canvas.getContext('2d').drawImage(video, 0, 0);
-
-    const dataUrl = canvas.toDataURL('image/jpeg');
-    document.getElementById('reviewPhoto').src = dataUrl;
+    document.getElementById('reviewPhoto').src = canvas.toDataURL('image/jpeg');
     document.getElementById('cameraView').style.display = 'none';
     document.getElementById('photoReview').style.display = 'flex';
     document.getElementById('cornerInstruction').textContent = "Charo kone par tap karo (1/4)";
-
     measurementCorners = [];
     updateCornerOverlay();
-    speakQuestion("Charo kone par tap karo", { lang: 'hi-IN' });
-
-    if (roomPhotoStream) {
-        roomPhotoStream.getTracks().forEach(t => t.stop());
-        roomPhotoStream = null;
-    }
+    if (roomPhotoStream) { roomPhotoStream.getTracks().forEach(t => t.stop()); roomPhotoStream = null; }
 });
 
 function retakePhoto() {
@@ -2430,29 +1859,20 @@ function retakePhoto() {
 
 document.getElementById('photoContainer').addEventListener('click', (e) => {
     if (measurementCorners.length >= 4) return;
-
     const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-
-    // Normalize to percentage
-    measurementCorners.push({ x: x / rect.width, y: y / rect.height });
+    measurementCorners.push({ x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height });
     updateCornerOverlay();
-
     if (measurementCorners.length < 4) {
         document.getElementById('cornerInstruction').textContent = `Charo kone par tap karo (${measurementCorners.length + 1}/4)`;
     } else {
         document.getElementById('cornerInstruction').textContent = "Sab corners mark ho gaye! ✅";
         document.getElementById('confirmCornersBtn').disabled = false;
-        speakQuestion("Sab corners mark ho gaye. Area calculate karo.", { lang: 'hi-IN' });
     }
 });
 
 function updateCornerOverlay() {
     const svg = document.getElementById('cornerSvg');
     svg.innerHTML = '';
-
-    // Draw lines
     if (measurementCorners.length > 1) {
         let pathD = `M ${measurementCorners[0].x * 100}% ${measurementCorners[0].y * 100}%`;
         for (let i = 1; i < measurementCorners.length; i++) {
@@ -2460,46 +1880,28 @@ function updateCornerOverlay() {
         }
         svg.innerHTML += `<path d="${pathD}" class="corner-line" />`;
     }
-
-    // Draw dots
     measurementCorners.forEach((c, i) => {
         svg.innerHTML += `<circle cx="${c.x * 100}%" cy="${c.y * 100}%" r="8" class="corner-dot" />`;
         svg.innerHTML += `<text x="${c.x * 100}%" y="${c.y * 100}%" fill="white" font-size="12" text-anchor="middle" dominant-baseline="middle">${i + 1}</text>`;
     });
 }
 
-function calculateRoomArea() {
-    // Calculate approximate dimensions from 4 corners
-    if (measurementCorners.length === 4) {
-        // Calculate width and height from corner points (normalized 0-1)
-        const width = Math.abs(measurementCorners[1].x - measurementCorners[0].x);
-        const height = Math.abs(measurementCorners[2].y - measurementCorners[0].y);
-        
-        // Ask user for one reference measurement to scale
-        closeMeasurementOverlay();
-        
-        // Show simple prompt with voice guidance
-        addMessage("Room ki photo le li! ✅ Ab ek deewar ki lambai batao (feet mein). Jaise: 12", 'system');
-        speakQuestion("Ab ek deewar ki lambai batao", { lang: 'hi-IN' });
-        
-        // Set up to receive the reference measurement
-        AppState._pendingCornerScale = { width, height };
-        AppState.currentStep = 'roomDimensionsManual';
-        showQuestion('roomDimensionsManual');
-        return;
-    }
-    
-    // Fallback if corners not marked
+function calculateRoomAreaFromCorners() {
     closeMeasurementOverlay();
+    addMessage("Room ki photo le li! ✅ Ab dimensions type karo (feet mein). Jaise: 12 by 14", 'system');
+    lastShownQuestion = null;
     AppState.currentStep = 'roomDimensionsManual';
     showQuestion('roomDimensionsManual');
 }
 
 function enterManualMeasure() {
     closeMeasurementOverlay();
+    lastShownQuestion = null;
     AppState.currentStep = 'roomDimensionsManual';
     showQuestion('roomDimensionsManual');
 }
 
-document.getElementById('closeMeasureBtn').addEventListener('click', closeMeasurementOverlay);
-
+document.getElementById('closeMeasureBtn').addEventListener('click', () => {
+    closeMeasurementOverlay();
+    enterManualMeasure();
+});
