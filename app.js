@@ -1,15 +1,16 @@
 // ===== Application State =====
+const Core = window.BillCore;
+
+function buildNewBill() {
+    const bill = Core.createEmptyBill();
+    bill.id = generateId();
+    bill.createdAt = new Date().toISOString();
+    bill.updatedAt = bill.createdAt;
+    return bill;
+}
+
 const AppState = {
-    bill: {
-        id: null,
-        customer: { name: '', phone: '', address: '', houseNumber: '' },
-        floors: [],
-        rates: { floor: 0, wall: 0, skirting: 0, hole: 0 },
-        extras: { skirting: { enabled: false, length: 0 }, holes: { enabled: false, count: 0 } },
-        minusArea: 0,
-        createdAt: null,
-        updatedAt: null
-    },
+    bill: Core.createEmptyBill(),
     currentStep: 'welcome',
     currentFloorIndex: -1,
     currentRoomIndex: -1,   // FIXED: keep here, not on bill
@@ -169,12 +170,11 @@ const QuestionFlow = {
             { value: 'no', label: { en: 'No', hi: 'Nahi' } }
         ],
         next: 'nextRoom',
-        checkNext: (value) => value === 'yes' ? 'minusAreaValue' : 'nextRoom',
-        saveTo: 'hasMinusArea', saveValue: (v) => v === 'yes'
+        checkNext: (value) => value === 'yes' ? 'minusAreaValue' : 'nextRoom'
     },
     minusAreaValue: {
         question: { en: "Minus area in sq ft?", hi: "Minus area kitni sq ft?" },
-        inputType: 'number', next: 'nextRoom', saveTo: 'minusArea'
+        inputType: 'number', next: 'nextRoom', saveTo: 'currentRoom.minusArea'
     },
     nextRoom: {
         question: { en: "Aur room hai?", hi: "Aur room hai?" },
@@ -339,43 +339,15 @@ function formatCurrency(amount) {
 }
 
 function calculateRoomArea(room) {
-    return (parseFloat(room.length) || 0) * (parseFloat(room.breadth) || 0);
+    return Core.calculateRoomArea(room);
 }
 
 function calculateRoomCosts(room, rates) {
-    const area = calculateRoomArea(room);
-    const finalArea = Math.max(0, area - (AppState.bill.minusArea || 0));
-    const costs = { floorMaterial: 0, wallMaterial: 0 };
-    const floorRate = room.floorRate || rates.floor || 0;
-    const wallRate = room.wallRate || rates.wall || 0;
-    if (room.workType === 'floor' || room.workType === 'both') {
-        costs.floorMaterial = finalArea * floorRate;
-    }
-    if (room.workType === 'wall' || room.workType === 'both') {
-        costs.wallMaterial = finalArea * wallRate;
-    }
-    return { ...costs, area, finalArea, roomTotal: costs.floorMaterial + costs.wallMaterial, floorRate, wallRate };
+    return Core.calculateRoomCosts(room, rates);
 }
 
 function calculateTotalCosts() {
-    const rates = AppState.bill.rates;
-    const totals = { floorArea: 0, floorMaterial: 0, wallMaterial: 0, skirtingCost: 0, holeCost: 0 };
-    AppState.bill.floors.forEach(floor => {
-        floor.rooms.forEach(room => {
-            const costs = calculateRoomCosts(room, rates);
-            totals.floorArea += costs.area;
-            totals.floorMaterial += costs.floorMaterial;
-            totals.wallMaterial += costs.wallMaterial;
-        });
-    });
-    if (AppState.bill.extras.skirting.enabled) {
-        totals.skirtingCost = (AppState.bill.extras.skirting.length || 0) * (rates.skirting || 0);
-    }
-    if (AppState.bill.extras.holes.enabled) {
-        totals.holeCost = (AppState.bill.extras.holes.count || 0) * (rates.hole || 0);
-    }
-    totals.grandTotal = totals.floorMaterial + totals.wallMaterial + totals.skirtingCost + totals.holeCost;
-    return totals;
+    return Core.calculateTotalCosts(AppState.bill);
 }
 
 function showToast(message, type = 'info') {
@@ -427,16 +399,7 @@ function clearQuickButtons() {
 
 // ===== Navigation Functions =====
 function startNewBill() {
-    AppState.bill = {
-        id: generateId(),
-        customer: { name: '', phone: '', address: '', houseNumber: '' },
-        floors: [],
-        rates: { floor: 0, wall: 0, skirting: 0, hole: 0 },
-        extras: { skirting: { enabled: false, length: 0 }, holes: { enabled: false, count: 0 } },
-        minusArea: 0,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-    };
+    AppState.bill = buildNewBill();
     AppState.currentStep = 'customerName';
     AppState.currentFloorIndex = -1;
     AppState.currentRoomIndex = -1;
@@ -477,6 +440,7 @@ function showQuestion(stepKey) {
 
     AppState.currentStep = stepKey;
     lastShownQuestion = stepKey;
+    updateRecognitionPhrases(stepKey);
 
     clearPhoneConfirmBtn();
     const question = getQuestion(stepKey);
@@ -579,7 +543,7 @@ function handleTextInput() {
     const step = QuestionFlow[AppState.currentStep];
 
     if (step.inputType === 'phone') {
-        const digits = value.replace(/\D/g, '');
+        const digits = Core.normalizePhoneNumber(value);
         if (digits.length < 10) {
             showToast('Phone number should be at least 10 digits', 'error');
             return;
@@ -857,36 +821,62 @@ function ensureCurrentRoom() {
     if (AppState.currentFloorIndex === -1) return;
     const floor = AppState.bill.floors[AppState.currentFloorIndex];
     if (!floor.rooms[AppState.currentRoomIndex]) {
-        floor.rooms[AppState.currentRoomIndex] = {
-            name: '', length: 0, breadth: 0, area: 0,
-            tileType: '', workType: '', floorRate: 0, wallRate: 0, imageData: null
-        };
+        floor.rooms[AppState.currentRoomIndex] = Core.createEmptyRoom();
     }
 }
 
-function showFinalSummary() {
+function clearChatMessages() {
+    DOM.chatMessages.innerHTML = '';
+}
+
+function normalizeBillData(bill) {
+    const normalized = Object.assign(Core.createEmptyBill(), bill || {});
+    normalized.customer = Object.assign(Core.createEmptyBill().customer, normalized.customer || {});
+    normalized.rates = Object.assign(Core.createEmptyBill().rates, normalized.rates || {});
+    normalized.extras = {
+        skirting: Object.assign({ enabled: false, length: 0 }, normalized.extras?.skirting || {}),
+        holes: Object.assign({ enabled: false, count: 0 }, normalized.extras?.holes || {})
+    };
+    normalized.customNotes = Array.isArray(normalized.customNotes) ? normalized.customNotes : [];
+    normalized.floors = (normalized.floors || []).map((floor) => ({
+        name: floor.name || '',
+        rooms: (floor.rooms || []).map((room) => Object.assign(Core.createEmptyRoom(), room || {}))
+    }));
+    return normalized;
+}
+
+function showFinalSummary(options = {}) {
+    const introMessage = options.introMessage || null;
     const totals = calculateTotalCosts();
     const rates = AppState.bill.rates;
+    clearChatMessages();
+
+    if (introMessage) {
+        addMessage(introMessage, 'system');
+    }
 
     let roomDetails = '';
     AppState.bill.floors.forEach((floor, fi) => {
         floor.rooms.forEach((room, ri) => {
-            const area = calculateRoomArea(room);
             const costs = calculateRoomCosts(room, rates);
             const workLabel = room.workType === 'floor' ? 'Floor' : room.workType === 'wall' ? 'Wall' : 'Floor+Wall';
             const roomImageHtml = room.imageData ? `<img src="${room.imageData}" style="max-width:120px;max-height:80px;border-radius:8px;margin-bottom:8px;cursor:pointer;" onclick="this.style.maxWidth='300px';this.style.maxHeight='300px';">` : '';
+            const netAreaLine = costs.minusArea > 0
+                ? `<div>Minus: ${costs.minusArea} sq ft | Net: ${costs.finalArea} sq ft</div>`
+                : `<div>Net Area: ${costs.finalArea} sq ft</div>`;
 
             roomDetails += `
                 <div style="margin-bottom:15px;padding:10px;background:#f5f5f5;border-radius:8px;">
                     ${roomImageHtml}
                     <div style="font-weight:600;margin-bottom:5px;">${sanitizeHTML(room.name)} (${sanitizeHTML(floor.name)})</div>
                     <div style="font-size:0.85rem;color:#666;">
-                        <div>Size: ${room.length || 0}' x ${room.breadth || 0}' = ${area} sq ft</div>
+                        <div>Size: ${room.length || 0}' x ${room.breadth || 0}' = ${costs.area} sq ft</div>
+                        ${netAreaLine}
                         <div>Tile: ${sanitizeHTML(room.tileType)} | Work: ${workLabel}</div>
                     </div>
                     <table style="width:100%;margin-top:8px;font-size:0.85rem;">
-                        ${costs.floorMaterial > 0 ? `<tr><td>Floor Tile</td><td>${area} sq ft</td><td>x ${costs.floorRate}</td><td style="text-align:right;">${formatCurrency(costs.floorMaterial)}</td></tr>` : ''}
-                        ${costs.wallMaterial > 0 ? `<tr><td>Wall Tile</td><td>${area} sq ft</td><td>x ${costs.wallRate}</td><td style="text-align:right;">${formatCurrency(costs.wallMaterial)}</td></tr>` : ''}
+                        ${costs.floorMaterial > 0 ? `<tr><td>Floor Tile</td><td>${costs.finalArea} sq ft</td><td>x ${costs.floorRate}</td><td style="text-align:right;">${formatCurrency(costs.floorMaterial)}</td></tr>` : ''}
+                        ${costs.wallMaterial > 0 ? `<tr><td>Wall Tile</td><td>${costs.finalArea} sq ft</td><td>x ${costs.wallRate}</td><td style="text-align:right;">${formatCurrency(costs.wallMaterial)}</td></tr>` : ''}
                         <tr style="font-weight:600;background:#e3f2fd;"><td colspan="3">Room Total:</td><td style="text-align:right;">${formatCurrency(costs.roomTotal)}</td></tr>
                     </table>
                 </div>`;
@@ -897,6 +887,7 @@ function showFinalSummary() {
         <div style="text-align:left;font-size:0.9rem;">
             <div style="margin-bottom:10px;"><strong>Customer:</strong> ${sanitizeHTML(AppState.bill.customer.name)}</div>
             <div style="margin-bottom:10px;"><strong>Phone:</strong> ${sanitizeHTML(AppState.bill.customer.phone)}</div>
+            <div style="margin-bottom:10px;"><strong>Net Area:</strong> ${totals.netArea} sq ft</div>
             ${roomDetails}
             ${totals.skirtingCost > 0 ? `<div style="padding:10px;background:#e8f5e9;border-radius:8px;margin-bottom:10px;"><strong>Skirting:</strong> ${AppState.bill.extras.skirting.length} ft x ${rates.skirting} = ${formatCurrency(totals.skirtingCost)}</div>` : ''}
             ${totals.holeCost > 0 ? `<div style="padding:10px;background:#e8f5e9;border-radius:8px;margin-bottom:10px;"><strong>Hole Fittings:</strong> ${AppState.bill.extras.holes.count} x ${rates.hole} = ${formatCurrency(totals.holeCost)}</div>` : ''}
@@ -944,8 +935,10 @@ function updatePreview() {
                 </div>
             </div>
             <div class="floor-body">${floor.rooms.map((room, ri) => {
-                const area = calculateRoomArea(room);
                 const costs = calculateRoomCosts(room, AppState.bill.rates);
+                const areaLabel = costs.minusArea > 0
+                    ? `${costs.area} - ${costs.minusArea} = ${costs.finalArea} sq ft`
+                    : `${costs.finalArea} sq ft`;
                 const roomImageHtml = room.imageData ? `<img src="${room.imageData}" style="width:100%;max-height:100px;object-fit:cover;border-radius:6px;margin-bottom:8px;">` : '';
                 const editBtn = `<button onclick="editRoom(${ri}, ${fi})" style="position:absolute;top:8px;right:8px;background:rgba(30,136,229,0.9);color:white;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:0.7rem;">Edit</button>`;
                 return `<div class="room-item" style="position:relative;">
@@ -955,15 +948,15 @@ function updatePreview() {
                         <span class="room-item-area" style="background:#1e88e5;color:white;padding:2px 8px;border-radius:4px;">${formatCurrency(costs.roomTotal)}</span>
                     </div>
                     <div style="font-size:0.8rem;color:#666;margin:5px 0;">
-                        <span>${room.length || 0}' x ${room.breadth || 0}' = ${area} sq ft</span>
+                        <span>${room.length || 0}' x ${room.breadth || 0}' = ${areaLabel}</span>
                     </div>
                     <div class="room-item-details">
                         <span class="room-item-tag">${sanitizeHTML(room.tileType) || 'No tile'}</span>
                         <span class="room-item-tag">${room.workType === 'floor' ? 'Floor' : room.workType === 'wall' ? 'Wall' : room.workType === 'both' ? 'Floor+Wall' : 'No work'}</span>
                     </div>
                     <div class="cost-summary">
-                        ${costs.floorMaterial > 0 ? `<div class="cost-row"><span>Floor (${area} x ${costs.floorRate})</span><span>${formatCurrency(costs.floorMaterial)}</span></div>` : ''}
-                        ${costs.wallMaterial > 0 ? `<div class="cost-row"><span>Wall (${area} x ${costs.wallRate})</span><span>${formatCurrency(costs.wallMaterial)}</span></div>` : ''}
+                        ${costs.floorMaterial > 0 ? `<div class="cost-row"><span>Floor (${costs.finalArea} x ${costs.floorRate})</span><span>${formatCurrency(costs.floorMaterial)}</span></div>` : ''}
+                        ${costs.wallMaterial > 0 ? `<div class="cost-row"><span>Wall (${costs.finalArea} x ${costs.wallRate})</span><span>${formatCurrency(costs.wallMaterial)}</span></div>` : ''}
                     </div>
                 </div>`;
             }).join('')}</div>
@@ -993,6 +986,10 @@ function editRoom(roomIndex, floorIndex) {
                     <label style="display:block;margin-bottom:5px;font-weight:500;">Breadth (feet)</label>
                     <input type="number" id="editRoomBreadth" value="${room.breadth || 0}" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:1rem;">
                 </div>
+            </div>
+            <div style="margin-bottom:15px;">
+                <label style="display:block;margin-bottom:5px;font-weight:500;">Minus Area (sq ft)</label>
+                <input type="number" id="editRoomMinusArea" value="${room.minusArea || 0}" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:1rem;">
             </div>
             <div style="margin-bottom:15px;">
                 <label style="display:block;margin-bottom:5px;font-weight:500;">Tile Size</label>
@@ -1035,6 +1032,7 @@ function applyRoomEdits(roomIndex, floorIndex) {
     room.name = document.getElementById('editRoomName').value;
     room.length = parseFloat(document.getElementById('editRoomLength').value) || 0;
     room.breadth = parseFloat(document.getElementById('editRoomBreadth').value) || 0;
+    room.minusArea = parseFloat(document.getElementById('editRoomMinusArea').value) || 0;
     room.tileType = document.getElementById('editRoomTile').value;
     room.workType = document.getElementById('editRoomWorkType').value;
     room.floorRate = parseFloat(document.getElementById('editRoomFloorRate').value) || 0;
@@ -1051,6 +1049,9 @@ function applyRoomEdits(roomIndex, floorIndex) {
 function deleteRoom(roomIndex, floorIndex) {
     if (confirm('Delete this room?')) {
         AppState.bill.floors[floorIndex].rooms.splice(roomIndex, 1);
+        if (AppState.bill.floors[floorIndex].rooms.length === 0) {
+            AppState.bill.floors.splice(floorIndex, 1);
+        }
         AppState.bill.updatedAt = new Date().toISOString();
         saveToLocalStorage();
         updatePreview();
@@ -1078,6 +1079,7 @@ function addCustomNote() {
 // ===== Storage Functions =====
 function saveToLocalStorage() {
     try {
+        if (!AppState.bill.id) return;
         const bills = JSON.parse(localStorage.getItem('thikaidar_bills') || '{}');
         bills[AppState.bill.id] = AppState.bill;
         localStorage.setItem('thikaidar_bills', JSON.stringify(bills));
@@ -1152,20 +1154,20 @@ function showSavedBills() {
 function loadBill(id) {
     const bill = loadFromLocalStorage(id);
     if (!bill) { showToast('Bill not found', 'error'); return; }
-    AppState.bill = bill;
+    AppState.bill = normalizeBillData(bill);
     AppState.currentStep = 'complete';
-    AppState.currentFloorIndex = bill.floors.length - 1;
+    AppState.currentFloorIndex = AppState.bill.floors.length - 1;
     AppState.currentRoomIndex = 0;
+    lastShownQuestion = null;
     DOM.welcomeScreen.style.display = 'none';
     DOM.chatMessages.style.display = 'flex';
     DOM.inputArea.style.display = 'none';
     DOM.progressContainer.style.display = 'none';
     DOM.previewFooter.style.display = 'block';
-    addMessage(`<strong>Bill loaded:</strong> ${sanitizeHTML(bill.customer.name)}`, 'system');
     const totals = calculateTotalCosts();
     DOM.grandTotal.textContent = formatCurrency(totals.grandTotal);
     updatePreview();
-    showFinalSummary();
+    showFinalSummary({ introMessage: `<strong>Bill loaded:</strong> ${sanitizeHTML(AppState.bill.customer.name)}` });
     showToast('Bill loaded', 'success');
 }
 
@@ -1177,9 +1179,9 @@ function showFullBill() {
     let roomRows = '';
     bill.floors.forEach((floor, fi) => {
         floor.rooms.forEach((room, ri) => {
-            const area = calculateRoomArea(room);
             const costs = calculateRoomCosts(room, rates);
             const roomImageHtml = room.imageData ? `<img src="${room.imageData}" style="max-width:200px;max-height:150px;border-radius:8px;margin-bottom:12px;cursor:pointer;" onclick="this.style.maxWidth='500px';this.style.maxHeight='500px';">` : '';
+            const areaLabel = costs.minusArea > 0 ? `${costs.area} - ${costs.minusArea} = ${costs.finalArea} sq ft` : `${costs.finalArea} sq ft`;
 
             roomRows += `
                 <div style="margin-bottom:20px;padding:15px;background:#f9f9f9;border-radius:8px;position:relative;">
@@ -1200,7 +1202,7 @@ function showFullBill() {
                             <td style="padding:8px;border:1px solid #ddd;">Floor Tile (${sanitizeHTML(room.tileType)})</td>
                             <td style="padding:8px;border:1px solid #ddd;text-align:right;">${room.length}'</td>
                             <td style="padding:8px;border:1px solid #ddd;text-align:right;">${room.breadth}'</td>
-                            <td style="padding:8px;border:1px solid #ddd;text-align:right;">${area} sq ft</td>
+                            <td style="padding:8px;border:1px solid #ddd;text-align:right;">${areaLabel}</td>
                             <td style="padding:8px;border:1px solid #ddd;text-align:right;">${costs.floorRate}</td>
                             <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:bold;">${formatCurrency(costs.floorMaterial)}</td>
                         </tr>` : ''}
@@ -1208,7 +1210,7 @@ function showFullBill() {
                             <td style="padding:8px;border:1px solid #ddd;">Wall Tile (${sanitizeHTML(room.tileType)})</td>
                             <td style="padding:8px;border:1px solid #ddd;text-align:right;">${room.length}'</td>
                             <td style="padding:8px;border:1px solid #ddd;text-align:right;">${room.breadth}'</td>
-                            <td style="padding:8px;border:1px solid #ddd;text-align:right;">${area} sq ft</td>
+                            <td style="padding:8px;border:1px solid #ddd;text-align:right;">${areaLabel}</td>
                             <td style="padding:8px;border:1px solid #ddd;text-align:right;">${costs.wallRate}</td>
                             <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:bold;">${formatCurrency(costs.wallMaterial)}</td>
                         </tr>` : ''}
@@ -1252,8 +1254,15 @@ function showFullBill() {
 }
 
 function printBill() {
+    if (!DOM.fullBillContent.innerHTML.trim()) {
+        showFullBill();
+    }
     const printContent = DOM.fullBillContent.innerHTML;
     const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+        showToast('Popup blocked. Please allow popups to print.', 'error');
+        return;
+    }
     printWindow.document.write(`<html><head><title>Print Bill</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;padding:20px}table{width:100%;border-collapse:collapse;margin:20px 0}th,td{border:1px solid #ddd;padding:10px;text-align:left}</style></head><body>${printContent}</body></html>`);
     printWindow.document.close();
     printWindow.print();
@@ -1308,7 +1317,6 @@ async function exportPdf() {
 
         bill.floors.forEach((floor) => {
             floor.rooms.forEach((room) => {
-                const area = calculateRoomArea(room);
                 const costs = calculateRoomCosts(room, rates);
                 let roomBlockHeight = 40;
                 if (costs.floorMaterial > 0) roomBlockHeight += 8;
@@ -1337,7 +1345,12 @@ async function exportPdf() {
                 doc.setTextColor(50, 50, 50);
                 doc.setFontSize(9);
                 doc.setFont('helvetica', 'normal');
-                doc.text(`Size: ${room.length}' x ${room.breadth}' = ${area} sq ft`, textStartX, yPos); yPos += 6;
+                doc.text(`Size: ${room.length}' x ${room.breadth}' = ${costs.area} sq ft`, textStartX, yPos); yPos += 6;
+                if (costs.minusArea > 0) {
+                    doc.text(`Minus Area: ${costs.minusArea} sq ft | Net: ${costs.finalArea} sq ft`, textStartX, yPos); yPos += 6;
+                } else {
+                    doc.text(`Net Area: ${costs.finalArea} sq ft`, textStartX, yPos); yPos += 6;
+                }
                 doc.text(`Tile: ${room.tileType}  |  Work: ${room.workType === 'both' ? 'Floor + Wall' : room.workType}`, textStartX, yPos); yPos += 8;
                 if (hasImage && yPos < roomStartY + imgHeight + 4) yPos = roomStartY + imgHeight + 4;
 
@@ -1354,14 +1367,14 @@ async function exportPdf() {
                 yPos += 9;
                 if (costs.floorMaterial > 0) {
                     doc.text('Floor Tile', colDesc, yPos);
-                    doc.text(`${area} sq ft`, colArea, yPos);
+                    doc.text(`${costs.finalArea} sq ft`, colArea, yPos);
                     doc.text(String(costs.floorRate), colRate, yPos);
                     doc.text(formatCurrency(costs.floorMaterial), colAmount, yPos, { align: 'right' });
                     yPos += 7;
                 }
                 if (costs.wallMaterial > 0) {
                     doc.text('Wall Tile', colDesc, yPos);
-                    doc.text(`${area} sq ft`, colArea, yPos);
+                    doc.text(`${costs.finalArea} sq ft`, colArea, yPos);
                     doc.text(String(costs.wallRate), colRate, yPos);
                     doc.text(formatCurrency(costs.wallMaterial), colAmount, yPos, { align: 'right' });
                     yPos += 7;
@@ -1426,9 +1439,9 @@ function shareToWhatsApp(forceTextOnly = false) {
     message += `*Customer:* ${bill.customer.name}\n*Phone:* ${bill.customer.phone}\n*Address:* ${bill.customer.address}\n─────────────────\n`;
     bill.floors.forEach(floor => {
         floor.rooms.forEach(room => {
-            const area = (parseFloat(room.length) || 0) * (parseFloat(room.breadth) || 0);
+            const costs = calculateRoomCosts(room, bill.rates);
             const workLabel = room.workType === 'floor' ? 'Floor' : room.workType === 'wall' ? 'Wall' : 'Floor+Wall';
-            message += `${room.name} (${floor.name}): ${room.length}'x${room.breadth}' = ${area} sq ft [${workLabel}]\n`;
+            message += `${room.name} (${floor.name}): ${room.length}'x${room.breadth}' = ${costs.finalArea} sq ft [${workLabel}]\n`;
         });
     });
     if (totals.skirtingCost > 0) message += `Skirting: ${bill.extras.skirting.length}ft x Rs${bill.rates.skirting} = Rs${totals.skirtingCost}\n`;
@@ -1450,7 +1463,10 @@ function openWhatsAppLink(message, phone) {
     const waUrl = cleanPhone.length >= 10
         ? `https://wa.me/${cleanPhone}?text=${encodedMessage}`
         : `https://web.whatsapp.com/send?text=${encodedMessage}`;
-    window.open(waUrl, '_blank');
+    const popup = window.open(waUrl, '_blank');
+    if (!popup) {
+        showToast('Popup blocked. Please allow popups to open WhatsApp.', 'error');
+    }
 }
 
 // ===== Event Listeners =====
@@ -1499,8 +1515,8 @@ function initEventListeners() {
     const apiKeyInput = document.getElementById('groqApiKey');
     if (apiKeyInput) {
         apiKeyInput.addEventListener('change', (e) => {
-            saveApiKey(e.target.value.trim());
-            showToast('API Key saved', 'success');
+            const saved = saveApiKey(e.target.value.trim());
+            showToast(saved ? 'API key saved on this device' : 'API key removed', 'success');
         });
     }
 }
@@ -1514,6 +1530,7 @@ function selectLanguage(lang) {
     updateInputPlaceholder();
     if (AppState.recognition) {
         AppState.recognition.lang = lang === 'hi' ? 'hi-IN' : 'en-US';
+        updateRecognitionPhrases(AppState.currentStep);
     }
 }
 
@@ -1560,6 +1577,9 @@ async function getAIResponse(transcript, currentStep, options) {
             headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ model: 'llama-3.2-3b-preview', messages: [{ role: 'user', content: prompt }], max_tokens: 50, temperature: 0.1 })
         });
+        if (!response.ok) {
+            throw new Error(`AI request failed with status ${response.status}`);
+        }
         const data = await response.json();
         const answer = data.choices?.[0]?.message?.content?.trim().replace(/"/g, '') || '';
         if (valueToOption[answer]) return valueToOption[answer];
@@ -1583,7 +1603,9 @@ function initVoiceRecognition() {
     AppState.recognition = new SpeechRecognitionAPI();
     AppState.recognition.continuous = false;
     AppState.recognition.interimResults = true;
+    AppState.recognition.maxAlternatives = 3;
     AppState.recognition.lang = 'hi-IN';
+    updateRecognitionPhrases(AppState.currentStep);
 
     AppState.recognition.onstart = () => {
         AppState.isRecording = true;
@@ -1600,22 +1622,23 @@ function initVoiceRecognition() {
         DOM.voiceBtn.querySelector('.stop-icon').style.display = 'none';
     };
     AppState.recognition.onresult = (event) => {
-        const result = event.results[0];
-        const transcript = result[0].transcript;
+        const result = event.results[event.resultIndex] || event.results[0];
+        const transcriptCandidates = Array.from(result).map((alt) => alt.transcript).filter(Boolean);
+        const transcript = transcriptCandidates[0] || '';
         const step = QuestionFlow[AppState.currentStep];
         if (result.isFinal) {
             AppState.voiceTranscriptBuffer = transcript;
             if (step.inputType === 'phone') {
-                const digits = transcript.replace(/\D/g, '');
-                const currentValue = DOM.textInput.value.replace(/\D/g, '');
+                const digits = Core.normalizePhoneNumber(transcript);
+                const currentValue = Core.normalizePhoneNumber(DOM.textInput.value);
                 DOM.textInput.value = digits.length > currentValue.length ? digits : (digits || currentValue);
             } else {
-                handleVoiceInput(transcript);
+                handleVoiceInput(transcript, transcriptCandidates);
             }
         } else {
             AppState.voiceTranscriptBuffer = transcript;
             if (step.inputType === 'phone') {
-                DOM.textInput.value = transcript.replace(/\D/g, '');
+                DOM.textInput.value = Core.normalizePhoneNumber(transcript);
             } else {
                 DOM.textInput.value = transcript;
             }
@@ -1647,14 +1670,14 @@ function toggleVoiceRecording() {
     }
 }
 
-async function handleVoiceInput(transcript) {
+async function handleVoiceInput(transcript, transcriptCandidates = []) {
     if (!transcript) return;
     const step = QuestionFlow[AppState.currentStep];
 
     if (step.inputType === 'phone') {
-        const digits = transcript.replace(/\D/g, '');
+        const digits = Core.normalizePhoneNumber(transcript);
         if (digits.length > 0) {
-            const newValue = DOM.textInput.value.replace(/\D/g, '') + digits;
+            const newValue = Core.normalizePhoneNumber(DOM.textInput.value) + digits;
             DOM.textInput.value = newValue;
             if (newValue.length >= 10) showToast('Phone number ready! Press OK', 'success');
         }
@@ -1677,7 +1700,7 @@ async function handleVoiceInput(transcript) {
     }
 
     if (step.inputType === 'quick') {
-        let matchedOption = findMatchingOption(transcript, step.options);
+        let matchedOption = findMatchingOption(transcript, step.options, transcriptCandidates);
         if (!matchedOption && GROQ_API_KEY) {
             matchedOption = await getAIResponse(transcript, AppState.currentStep, step.options);
         }
@@ -1782,6 +1805,22 @@ function findMatchingOption(transcript, options) {
         };
     }
 
+    if (currentStep === 'floorSelection') {
+        const directFloorMatches = [
+            { patterns: ['\u0917\u094d\u0930\u093e\u0909\u0902\u0921', '\u0917\u094d\u0930\u093e\u0909\u0902\u0921 \u092b\u094d\u0932\u094b\u0930'], value: 'Ground Floor' },
+            { patterns: ['\u092b\u0930\u094d\u0938\u094d\u091f', '\u092b\u0930\u094d\u0938\u094d\u091f \u092b\u094d\u0932\u094b\u0930', '\u092b\u0938\u094d\u091f', '\u092b\u0938\u094d\u091f \u092b\u094d\u0932\u094b\u0930'], value: 'First Floor' },
+            { patterns: ['\u0938\u0947\u0915\u0902\u0921', '\u0938\u0947\u0915\u0902\u0921 \u092b\u094d\u0932\u094b\u0930', '\u0938\u0947\u0915\u0947\u0902\u0921', '\u0938\u0947\u0915\u0947\u0902\u0921 \u092b\u094d\u0932\u094b\u0930'], value: 'Second Floor' },
+            { patterns: ['\u0925\u0930\u094d\u0921', '\u0925\u0930\u094d\u0921 \u092b\u094d\u0932\u094b\u0930', '\u0924\u0940\u0938\u0930\u093e'], value: 'Third Floor' },
+            { patterns: ['\u0926\u0942\u0938\u0930\u093e', '\u0915\u0938\u094d\u091f\u092e', '\u0905\u0928\u094d\u092f'], value: 'Custom' }
+        ];
+
+        for (const match of directFloorMatches) {
+            if (match.patterns.some((pattern) => transcript.includes(pattern))) {
+                return options.find((option) => option.value === match.value) || null;
+            }
+        }
+    }
+
     for (const option of options) {
         const labelHi = option.label.hi || '';
         if (labelHi && transcript.includes(labelHi)) return option;
@@ -1804,6 +1843,191 @@ function findMatchingOption(transcript, options) {
         if (score > bestScore && score > 0.5) { bestScore = score; bestMatch = option; }
     }
     return bestMatch;
+}
+
+const STEP_ALIAS_CATALOG = {
+    floorSelection: {
+        'Ground Floor': ['ground floor', 'ground', 'graund floor', 'ground flor', '\u0917\u094d\u0930\u093e\u0909\u0902\u0921', '\u0917\u094d\u0930\u093e\u0909\u0902\u0921 \u092b\u094d\u0932\u094b\u0930'],
+        'First Floor': ['first floor', 'first', '1st floor', 'pahla floor', 'pehla floor', 'phaila floor', 'pahila floor', '\u092a\u0939\u0932\u093e \u092b\u094d\u0932\u094b\u0930', '\u092a\u0939\u0932\u0940 \u092b\u094d\u0932\u094b\u0930', '\u092b\u0930\u094d\u0938\u094d\u091f \u092b\u094d\u0932\u094b\u0930', '\u092b\u0938\u094d\u091f \u092b\u094d\u0932\u094b\u0930'],
+        'Second Floor': ['second floor', 'second', '2nd floor', 'dusra floor', 'doosra floor', '\u0926\u0942\u0938\u0930\u093e \u092b\u094d\u0932\u094b\u0930', '\u0938\u0947\u0915\u0902\u0921 \u092b\u094d\u0932\u094b\u0930', '\u0938\u0947\u0915\u0947\u0902\u0921 \u092b\u094d\u0932\u094b\u0930'],
+        'Third Floor': ['third floor', 'third', '3rd floor', 'tisra floor', 'teesra floor', '\u0924\u0940\u0938\u0930\u093e \u092b\u094d\u0932\u094b\u0930', '\u0925\u0930\u094d\u0921 \u092b\u094d\u0932\u094b\u0930'],
+        'Custom': ['custom', 'other', 'another', 'doosra', '\u0905\u0928\u094d\u092f', '\u0926\u0942\u0938\u0930\u093e', '\u0915\u0938\u094d\u091f\u092e']
+    },
+    roomName: {
+        'Master Bedroom': ['master bedroom', 'master room', 'master', '\u092e\u093e\u0938\u094d\u091f\u0930 \u092c\u0947\u0921\u0930\u0942\u092e'],
+        'Bedroom': ['bedroom', 'bed room', 'room', '\u092c\u0947\u0921\u0930\u0942\u092e', '\u0915\u092e\u0930\u093e'],
+        'Guest Room': ['guest room', 'guest bedroom', 'guest', '\u0917\u0947\u0938\u094d\u091f \u0930\u0942\u092e'],
+        'Drawing Room': ['drawing room', 'drawing', 'living room', '\u0921\u094d\u0930\u093e\u0907\u0902\u0917 \u0930\u0942\u092e'],
+        'Hall': ['hall', '\u0939\u0949\u0932'],
+        'Kitchen': ['kitchen', 'kichan', '\u0915\u093f\u091a\u0928'],
+        'Bathroom': ['bathroom', 'bath room', '\u092c\u093e\u0925\u0930\u0942\u092e'],
+        'Toilet': ['toilet', 'washroom', '\u091f\u0949\u092f\u0932\u0947\u091f'],
+        'Balcony': ['balcony', '\u092c\u093e\u0932\u0915\u0928\u0940'],
+        'Store Room': ['store room', 'store', '\u0938\u094d\u091f\u094b\u0930 \u0930\u0942\u092e'],
+        'Room': ['room', 'other room', 'custom room', '\u0915\u092e\u0930\u093e']
+    },
+    tileType: {
+        '2x2': ['2x2', '2 by 2', 'two by two'],
+        '2x1': ['2x1', '2 by 1', 'two by one'],
+        '1x1': ['1x1', '1 by 1', 'one by one'],
+        'Custom': ['custom', 'other', '\u0926\u0942\u0938\u0930\u093e']
+    },
+    workType: {
+        floor: ['floor', 'floor only', 'niche', '\u0928\u0940\u091a\u0947', '\u092b\u094d\u0932\u094b\u0930'],
+        wall: ['wall', 'wall only', 'upar', 'opar', '\u090a\u092a\u0930', '\u0935\u093e\u0932'],
+        both: ['both', 'dono', 'floor wall', 'wall floor', '\u0926\u094b\u0928\u094b', '\u0926\u094b\u0928\u094b\u0902']
+    },
+    roomImage: {
+        yes: ['yes', 'haan', 'han', 'photo hai', '\u0939\u093e\u0901', '\u0939\u093e\u0902'],
+        no: ['no', 'nahi', 'nahin', '\u0928\u0939\u0940\u0902', '\u0928\u0939\u0940']
+    },
+    minusArea: {
+        yes: ['yes', 'haan', 'han', '\u0939\u093e\u0901', '\u0939\u093e\u0902'],
+        no: ['no', 'nahi', 'nahin', '\u0928\u0939\u0940\u0902', '\u0928\u0939\u0940']
+    },
+    nextRoom: {
+        yes: ['yes', 'haan', 'han', '\u0939\u093e\u0901', '\u0939\u093e\u0902'],
+        no: ['no', 'nahi', 'nahin', '\u0928\u0939\u0940\u0902', '\u0928\u0939\u0940']
+    },
+    nextFloor: {
+        yes: ['yes', 'haan', 'han', '\u0939\u093e\u0901', '\u0939\u093e\u0902'],
+        no: ['no', 'nahi', 'nahin', '\u0928\u0939\u0940\u0902', '\u0928\u0939\u0940']
+    },
+    skirtingNeededFinal: {
+        yes: ['yes', 'haan', 'han', '\u0939\u093e\u0901', '\u0939\u093e\u0902'],
+        no: ['no', 'nahi', 'nahin', '\u0928\u0939\u0940\u0902', '\u0928\u0939\u0940']
+    },
+    holesNeededFinal: {
+        yes: ['yes', 'haan', 'han', '\u0939\u093e\u0901', '\u0939\u093e\u0902'],
+        no: ['no', 'nahi', 'nahin', '\u0928\u0939\u0940\u0902', '\u0928\u0939\u0940']
+    }
+};
+
+function normalizeVoiceText(input) {
+    return String(input || '')
+        .toLowerCase()
+        .normalize('NFKD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^\w\s\u0900-\u097F]/g, ' ')
+        .replace(/\bflor\b|\bphlor\b|\bflour\b/g, 'floor')
+        .replace(/\bphela\b|\bpehla\b|\bpahila\b|\bphaila\b|\bpaila\b/g, 'pahla')
+        .replace(/\bsekand\b|\bsecand\b|\bsekend\b/g, 'second')
+        .replace(/\bthard\b/g, 'third')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function getOptionAliases(stepKey, option) {
+    const aliases = new Set();
+    const label = option.label || {};
+    const catalog = STEP_ALIAS_CATALOG[stepKey] || {};
+
+    aliases.add(String(option.value));
+    if (typeof label === 'string') {
+        aliases.add(label);
+    } else {
+        if (label.en) aliases.add(label.en);
+        if (label.hi) aliases.add(label.hi);
+    }
+    (catalog[option.value] || []).forEach((alias) => aliases.add(alias));
+
+    return Array.from(aliases).map((alias) => alias.trim()).filter(Boolean);
+}
+
+function getRecognitionPhrases(stepKey, options) {
+    const phraseSet = new Set();
+    options.forEach((option) => {
+        getOptionAliases(stepKey, option).forEach((alias) => phraseSet.add(alias));
+    });
+    return Array.from(phraseSet).slice(0, 60);
+}
+
+function updateRecognitionPhrases(stepKey) {
+    if (!AppState.recognition || !('phrases' in AppState.recognition)) return;
+
+    const step = QuestionFlow[stepKey];
+    if (!step || step.inputType !== 'quick' || !step.options || typeof window.SpeechRecognitionPhrase !== 'function') {
+        try {
+            AppState.recognition.phrases = [];
+        } catch (error) {
+            console.warn('Could not clear recognition phrases', error);
+        }
+        return;
+    }
+
+    try {
+        AppState.recognition.phrases = getRecognitionPhrases(stepKey, step.options)
+            .map((phrase) => new window.SpeechRecognitionPhrase(phrase, 5.0));
+    } catch (error) {
+        console.warn('Could not set recognition phrases', error);
+    }
+}
+
+function findMatchingOption(transcript, options, candidates = []) {
+    const stepKey = AppState.currentStep;
+    const transcriptCandidates = [transcript, ...candidates]
+        .filter(Boolean)
+        .map((value) => value.trim())
+        .filter(Boolean);
+
+    if (transcriptCandidates.length === 0) return null;
+
+    const normalizedCandidates = transcriptCandidates.map(normalizeVoiceText).filter(Boolean);
+    const yesPatterns = /\b(haan|han|yes|yeah|ji)\b/;
+    const noPatterns = /\b(nahi|nahin|no|nah|nhi)\b/;
+
+    if (options.some((option) => option.value === 'yes') && normalizedCandidates.some((value) => yesPatterns.test(value))) {
+        return options.find((option) => option.value === 'yes') || null;
+    }
+    if (options.some((option) => option.value === 'no') && normalizedCandidates.some((value) => noPatterns.test(value))) {
+        return options.find((option) => option.value === 'no') || null;
+    }
+
+    const searchableAliases = [];
+    options.forEach((option) => {
+        getOptionAliases(stepKey, option).forEach((alias) => {
+            searchableAliases.push({
+                value: option.value,
+                alias,
+                normalizedAlias: normalizeVoiceText(alias)
+            });
+        });
+    });
+
+    for (const candidate of normalizedCandidates) {
+        const directHit = searchableAliases.find((item) =>
+            item.normalizedAlias === candidate ||
+            candidate.includes(item.normalizedAlias) ||
+            item.normalizedAlias.includes(candidate)
+        );
+        if (directHit) {
+            return options.find((option) => option.value === directHit.value) || null;
+        }
+    }
+
+    if (window.Fuse) {
+        const fuse = new window.Fuse(searchableAliases, {
+            includeScore: true,
+            threshold: 0.36,
+            ignoreLocation: true,
+            minMatchCharLength: 2,
+            keys: ['normalizedAlias']
+        });
+
+        let bestResult = null;
+        for (const candidate of normalizedCandidates) {
+            const result = fuse.search(candidate)[0];
+            if (result && (!bestResult || result.score < bestResult.score)) {
+                bestResult = result;
+            }
+        }
+
+        if (bestResult && bestResult.score <= 0.36) {
+            return options.find((option) => option.value === bestResult.item.value) || null;
+        }
+    }
+
+    return null;
 }
 
 // ===== Room Measurement =====
